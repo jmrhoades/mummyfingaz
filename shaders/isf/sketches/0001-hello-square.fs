@@ -38,6 +38,14 @@
       "DEFAULT": 2,
       "VALUES": [0, 1, 2, 3, 4],
       "LABELS": ["1/16", "1/8", "1/4", "1/2", "1"]
+    },
+    {
+      "NAME": "rotateRate",
+      "LABEL": "Rotation Rate",
+      "TYPE": "long",
+      "DEFAULT": 5,
+      "VALUES": [0, 1, 2, 3, 4, 5],
+      "LABELS": ["1/16", "1/8", "1/4", "1/2", "1", "Off"]
     }
   ]
 }*/
@@ -88,9 +96,12 @@ void main() {
     float minSize = 1.0 - shrink;  // shrink=1 → minSize=0, shrink=0 → minSize=1
     float animSize = size * mix(minSize, 1.0, pulse);
 
-    // Rotate 90 degrees clockwise per pulse
-    float angle = -t * mult * 1.5708;  // -π/2 per pulse (clockwise)
-    st = rotate(st, angle);
+    // Rotate 90 degrees clockwise per pulse (if enabled)
+    if (rotateRate < 5) {
+        float rotMult = pow(2.0, 2.0 - float(rotateRate));
+        float angle = -t * rotMult * 1.5708;  // -π/2 per pulse (clockwise)
+        st = rotate(st, angle);
+    }
 
     // Shape SDF (st is already centered at origin)
     float dist;
