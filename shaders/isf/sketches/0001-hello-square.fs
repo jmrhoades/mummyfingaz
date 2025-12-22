@@ -42,6 +42,13 @@
   ]
 }*/
 
+// 2D rotation matrix
+vec2 rotate(vec2 p, float angle) {
+    float c = cos(angle);
+    float s = sin(angle);
+    return vec2(p.x * c - p.y * s, p.x * s + p.y * c);
+}
+
 // SDF for equilateral triangle centered at origin, pointing up
 float sdTriangle(vec2 p, float r) {
     const float k = sqrt(3.0);
@@ -80,6 +87,10 @@ void main() {
     float pulse = 0.5 + 0.5 * sin(t * mult * 6.28318);
     float minSize = 1.0 - shrink;  // shrink=1 → minSize=0, shrink=0 → minSize=1
     float animSize = size * mix(minSize, 1.0, pulse);
+
+    // Rotate 90 degrees clockwise per pulse
+    float angle = -t * mult * 1.5708;  // -π/2 per pulse (clockwise)
+    st = rotate(st, angle);
 
     // Shape SDF (st is already centered at origin)
     float dist;
