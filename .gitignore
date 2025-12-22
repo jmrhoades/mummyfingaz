@@ -1,3 +1,17 @@
 # macOS
 .DS_Store
 **/.DS_Store
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+
+# Large binaries / captures
+captures/
+*.mov
+*.mp4
+*.avi
+*.mkv
+*.webm
