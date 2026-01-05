@@ -7,13 +7,13 @@
       "NAME": "gridColor",
       "LABEL": "Grid Color",
       "TYPE": "color",
-      "DEFAULT": [0.0, 0.8, 1.0, 1.0]
+      "DEFAULT": [1.0, 1.0, 1.0, 1.0]
     },
     {
       "NAME": "bgColor",
       "LABEL": "Background Color",
       "TYPE": "color",
-      "DEFAULT": [0.0, 0.02, 0.05, 1.0]
+      "DEFAULT": [0.0, 0.0, 0.0, 1.0]
     },
     {
       "NAME": "majorDivisions",

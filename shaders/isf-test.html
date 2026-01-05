@@ -71,6 +71,27 @@
     }
     #play-btn:hover { background: #444; }
     #play-btn svg { width: 20px; height: 20px; fill: #eee; }
+    #audio-file {
+      display: none;
+    }
+    #audio-label {
+      padding: 0.4rem 0.75rem;
+      background: #333;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      transition: background 0.15s;
+    }
+    #audio-label:hover { background: #444; }
+    #audio-label.has-audio { background: #555; }
+    #audio-name {
+      max-width: 100px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.75rem;
+      color: #888;
+    }
 
     /* Main Layout */
     main {
@@ -145,7 +166,7 @@
       border: 1px solid #333;
     }
     #error {
-      color: #f66;
+      color: #999;
       padding: 1rem;
       white-space: pre-wrap;
       font-size: 0.8rem;
@@ -176,6 +197,13 @@
     <div class="toolbar-group">
       <span class="toolbar-label">Bar.Beat</span>
       <span class="toolbar-value" id="bar-beat-display">1.1</span>
+    </div>
+
+    <div class="toolbar-group">
+      <span class="toolbar-label">Audio</span>
+      <input type="file" id="audio-file" accept="audio/*">
+      <label id="audio-label" for="audio-file">Load Audio</label>
+      <span id="audio-name"></span>
     </div>
   </div>
 
@@ -215,6 +243,101 @@
     const bpmInput = document.getElementById('bpm');
     const timeDisplay = document.getElementById('time-display');
     const barBeatDisplay = document.getElementById('bar-beat-display');
+    const audioFileInput = document.getElementById('audio-file');
+    const audioLabel = document.getElementById('audio-label');
+    const audioName = document.getElementById('audio-name');
+
+    // Web Audio API for FFT analysis
+    let audioContext = null;
+    let analyser = null;
+    let audioSource = null;
+    let audioElement = null;
+    let frequencyData = null;
+    const FFT_SIZE = 2048;
+
+    // 5-band frequency ranges (approximate bin mappings for 44.1kHz sample rate)
+    // band1: Sub Bass (20-60Hz), band2: Bass (60-250Hz), band3: Low Mid (250-500Hz)
+    // band4: High Mid (500-2kHz), band5: Treble (2k-20kHz)
+    const bandRanges = [
+      { min: 20, max: 60 },      // Sub Bass
+      { min: 60, max: 250 },     // Bass
+      { min: 250, max: 500 },    // Low Mid
+      { min: 500, max: 2000 },   // High Mid
+      { min: 2000, max: 20000 }  // Treble
+    ];
+    let audioBands = [0, 0, 0, 0, 0];
+
+    function initAudio() {
+      if (audioContext) return;
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = FFT_SIZE;
+      analyser.smoothingTimeConstant = 0.8;
+      frequencyData = new Uint8Array(analyser.frequencyBinCount);
+    }
+
+    function freqToBin(freq, sampleRate, fftSize) {
+      return Math.round(freq * fftSize / sampleRate);
+    }
+
+    function getAverageVolume(dataArray, startBin, endBin) {
+      let sum = 0;
+      const count = endBin - startBin;
+      for (let i = startBin; i < endBin; i++) {
+        sum += dataArray[i];
+      }
+      return count > 0 ? (sum / count) / 255 : 0;
+    }
+
+    function updateAudioBands() {
+      if (!analyser || !audioElement || audioElement.paused) return;
+
+      analyser.getByteFrequencyData(frequencyData);
+      const sampleRate = audioContext.sampleRate;
+
+      for (let i = 0; i < 5; i++) {
+        const startBin = freqToBin(bandRanges[i].min, sampleRate, FFT_SIZE);
+        const endBin = freqToBin(bandRanges[i].max, sampleRate, FFT_SIZE);
+        audioBands[i] = getAverageVolume(frequencyData, startBin, endBin);
+      }
+    }
+
+    audioFileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      initAudio();
+
+      // Clean up previous audio
+      if (audioElement) {
+        audioElement.pause();
+        audioElement.remove();
+      }
+      if (audioSource) {
+        audioSource.disconnect();
+      }
+
+      // Create new audio element
+      audioElement = new Audio();
+      audioElement.src = URL.createObjectURL(file);
+      audioElement.loop = true;
+
+      // Connect to analyser
+      audioSource = audioContext.createMediaElementSource(audioElement);
+      audioSource.connect(analyser);
+      analyser.connect(audioContext.destination);
+
+      // Update UI
+      audioLabel.classList.add('has-audio');
+      audioLabel.textContent = 'Loaded';
+      audioName.textContent = file.name;
+
+      // If transport is already playing, start audio
+      if (isPlaying) {
+        await audioElement.play();
+        audioLabel.textContent = 'Playing';
+      }
+    });
 
     let program = null;
     let startTime = null;
@@ -496,15 +619,29 @@ void main() {
     // Transport controls
     function togglePlay() {
       if (isPlaying) {
+        // Stop
         pausedTime += performance.now() - startTime;
         isPlaying = false;
         playIcon.style.display = 'block';
         stopIcon.style.display = 'none';
+
+        // Pause audio
+        if (audioElement && !audioElement.paused) {
+          audioElement.pause();
+          audioLabel.textContent = 'Paused';
+        }
       } else {
+        // Play
         startTime = performance.now();
         isPlaying = true;
         playIcon.style.display = 'none';
         stopIcon.style.display = 'block';
+
+        // Resume audio
+        if (audioElement && audioElement.paused) {
+          audioElement.play();
+          audioLabel.textContent = 'Playing';
+        }
       }
     }
 
@@ -532,6 +669,9 @@ void main() {
       return `${bar}.${beatInBar}`;
     }
 
+    // Audio band names to auto-map
+    const audioBandNames = ['band1', 'band2', 'band3', 'band4', 'band5'];
+
     function render() {
       const now = performance.now();
       const delta = (now - lastTime) / 1000;
@@ -550,6 +690,9 @@ void main() {
       timeDisplay.textContent = formatTime(time);
       barBeatDisplay.textContent = formatBarBeat(beat);
 
+      // Update audio FFT bands
+      updateAudioBands();
+
       if (program) {
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 1);
@@ -566,6 +709,14 @@ void main() {
         isfInputs.forEach(input => {
           const loc = uniforms[input.NAME];
           if (loc === null) return;
+
+          // Auto-map audio bands if audio is playing
+          const bandIndex = audioBandNames.indexOf(input.NAME);
+          if (bandIndex !== -1 && audioElement && !audioElement.paused) {
+            gl.uniform1f(loc, audioBands[bandIndex]);
+            return;
+          }
+
           if (input.TYPE === 'float') gl.uniform1f(loc, input._value);
           else if (input.TYPE === 'bool') gl.uniform1i(loc, input._value ? 1 : 0);
           else if (input.TYPE === 'long') gl.uniform1i(loc, input._value);

@@ -64,7 +64,7 @@
       "NAME": "barColor",
       "LABEL": "Bar Color",
       "TYPE": "color",
-      "DEFAULT": [0.2, 0.8, 1.0, 1.0]
+      "DEFAULT": [1.0, 1.0, 1.0, 1.0]
     },
     {
       "NAME": "location",

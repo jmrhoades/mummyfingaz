@@ -150,6 +150,13 @@ Use normalized `audio` input (0.0–1.0) mapped from Videosync's FFT bands. Shad
 - Use consistent color space (linear vs sRGB awareness)
 - Document expected input ranges in JSON metadata
 
+### Color Scheme
+All shaders follow a strict 2-color palette:
+- **Foreground**: White `[1.0, 1.0, 1.0, 1.0]` — lines, shapes, text
+- **Background**: Black `[0.0, 0.0, 0.0, 1.0]` — always
+
+This ensures visual consistency across the library and allows color to be added downstream via filters, LUTs, or blend modes.
+
 ## Videosync Integration
 
 ### Videosync-Specific Uniforms
