@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ISF Shader Gallery</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      background: #111;
+      color: #eee;
+      min-height: 100vh;
+      padding-top: 60px;
+    }
+
+    /* Fixed Toolbar */
+    #toolbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 56px;
+      background: #1a1a1a;
+      border-bottom: 1px solid #333;
+      display: flex;
+      align-items: center;
+      padding: 0 1rem;
+      gap: 1.5rem;
+      z-index: 100;
+    }
+    #toolbar h1 {
+      font-size: 1rem;
+      font-weight: 500;
+      color: #888;
+    }
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .toolbar-label {
+      font-size: 0.75rem;
+      color: #666;
+      text-transform: uppercase;
+    }
+    .toolbar-value {
+      font-size: 1rem;
+      font-variant-numeric: tabular-nums;
+      min-width: 4rem;
+    }
+    #bpm {
+      width: 4rem;
+      padding: 0.25rem 0.5rem;
+      background: #222;
+      border: 1px solid #444;
+      color: #eee;
+      border-radius: 4px;
+    }
+    #play-btn {
+      width: 40px;
+      height: 40px;
+      background: #333;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+    }
+    #play-btn:hover { background: #444; }
+    #play-btn svg { width: 20px; height: 20px; fill: #eee; }
+
+    /* Main Layout */
+    main {
+      display: flex;
+      height: calc(100vh - 60px);
+    }
+
+    /* Gallery Sidebar */
+    #gallery {
+      width: 240px;
+      background: #1a1a1a;
+      border-right: 1px solid #333;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+    .shader-item {
+      padding: 0.75rem;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 0.25rem;
+      font-size: 0.875rem;
+      transition: background 0.15s;
+    }
+    .shader-item:hover { background: #2a2a2a; }
+    .shader-item.active { background: #333; color: #fff; }
+    .shader-item .name { font-weight: 500; }
+    .shader-item .desc { font-size: 0.75rem; color: #666; margin-top: 0.25rem; }
+
+    /* Canvas Area */
+    #canvas-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    #controls {
+      padding: 1rem;
+      background: #161616;
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      border-bottom: 1px solid #333;
+      min-height: 60px;
+    }
+    .control { display: flex; flex-direction: column; gap: 0.25rem; }
+    .control label { font-size: 0.7rem; color: #666; text-transform: uppercase; }
+    .control input[type="range"] { width: 100px; }
+    .control select {
+      padding: 0.25rem;
+      background: #222;
+      border: 1px solid #444;
+      color: #eee;
+      border-radius: 4px;
+    }
+    .control input[type="color"] {
+      width: 50px;
+      height: 28px;
+      border: none;
+      background: none;
+      cursor: pointer;
+    }
+    #canvas-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+      padding: 1rem;
+    }
+    canvas {
+      max-width: 100%;
+      max-height: 100%;
+      border: 1px solid #333;
+    }
+    #error {
+      color: #f66;
+      padding: 1rem;
+      white-space: pre-wrap;
+      font-size: 0.8rem;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <h1>mummyfingaz</h1>
+
+    <button id="play-btn" title="Play/Stop">
+      <svg id="play-icon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
+      <svg id="stop-icon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="5" width="14" height="14"/></svg>
+    </button>
+
+    <div class="toolbar-group">
+      <span class="toolbar-label">BPM</span>
+      <input type="number" id="bpm" value="120" min="20" max="300">
+    </div>
+
+    <div class="toolbar-group">
+      <span class="toolbar-label">Time</span>
+      <span class="toolbar-value" id="time-display">0:00.0</span>
+    </div>
+
+    <div class="toolbar-group">
+      <span class="toolbar-label">Bar.Beat</span>
+      <span class="toolbar-value" id="bar-beat-display">1.1</span>
+    </div>
+  </div>
+
+  <main>
+    <aside id="gallery">
+      <div class="shader-item active" data-shader="default">
+        <div class="name">Default Circle</div>
+        <div class="desc">Built-in demo</div>
+      </div>
+    </aside>
+
+    <div id="canvas-area">
+      <div id="controls"></div>
+      <div id="canvas-container">
+        <canvas id="canvas" width="800" height="600"></canvas>
+      </div>
+      <div id="error"></div>
+    </div>
+  </main>
+
+  <script>
+    // Shader files in sketches folder
+    const SKETCHES = [
+      '0001-hello-square.fs',
+      '0002-audio-spectrum.fs',
+      '0003-scifi-grid.fs',
+    ];
+
+    const canvas = document.getElementById('canvas');
+    const gl = canvas.getContext('webgl');
+    const controlsEl = document.getElementById('controls');
+    const errorEl = document.getElementById('error');
+    const galleryEl = document.getElementById('gallery');
+    const playBtn = document.getElementById('play-btn');
+    const playIcon = document.getElementById('play-icon');
+    const stopIcon = document.getElementById('stop-icon');
+    const bpmInput = document.getElementById('bpm');
+    const timeDisplay = document.getElementById('time-display');
+    const barBeatDisplay = document.getElementById('bar-beat-display');
+
+    let program = null;
+    let startTime = null;
+    let pausedTime = 0;
+    let isPlaying = false;
+    let isfInputs = [];
+    let uniforms = {};
+    let shaderCache = {};
+
+    // Default shader
+    const defaultShader = `/*{
+  "ISFVSN": "2",
+  "CATEGORIES": ["Generator"],
+  "DESCRIPTION": "Default pulsing circle",
+  "INPUTS": [
+    { "NAME": "speed", "TYPE": "float", "DEFAULT": 1.0, "MIN": 0.0, "MAX": 5.0 },
+    { "NAME": "color", "TYPE": "color", "DEFAULT": [1.0, 1.0, 1.0, 1.0] }
+  ]
+}*/
+
+void main() {
+    vec2 uv = isf_FragNormCoord;
+    float aspect = RENDERSIZE.x / RENDERSIZE.y;
+    vec2 st = uv - 0.5;
+    if (aspect > 1.0) st.x *= aspect;
+    else st.y /= aspect;
+
+    float t;
+    #ifdef VIDEOSYNC
+      t = BEAT;
+    #else
+      t = TIME;
+    #endif
+
+    float d = length(st);
+    float pulse = 0.5 + 0.5 * sin(t * speed * 6.28318);
+    float circle = step(d, 0.2 * pulse + 0.05);
+
+    gl_FragColor = vec4(color.rgb * circle, 1.0);
+}`;
+
+    shaderCache['default'] = defaultShader;
+
+    // Vertex shader
+    const vertexShaderSource = `
+      attribute vec2 position;
+      varying vec2 isf_FragNormCoord;
+      void main() {
+        isf_FragNormCoord = position * 0.5 + 0.5;
+        gl_Position = vec4(position, 0.0, 1.0);
+      }
+    `;
+
+    // ISF preamble
+    const isfPreamble = `
+      precision mediump float;
+      varying vec2 isf_FragNormCoord;
+      uniform vec2 RENDERSIZE;
+      uniform float TIME;
+      uniform float BEAT;
+      uniform float TIMEDELTA;
+      uniform int FRAMEINDEX;
+      #define VIDEOSYNC 1
+    `;
+
+    function parseISF(source) {
+      const match = source.match(/\/\*\s*(\{[\s\S]*?\})\s*\*\//);
+      if (!match) return { metadata: {}, glsl: source };
+      try {
+        const metadata = JSON.parse(match[1]);
+        const glsl = source.replace(match[0], '');
+        return { metadata, glsl };
+      } catch (e) {
+        return { metadata: {}, glsl: source };
+      }
+    }
+
+    function createShader(type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const error = gl.getShaderInfoLog(shader);
+        gl.deleteShader(shader);
+        throw new Error(error);
+      }
+      return shader;
+    }
+
+    function createProgram(vertSource, fragSource) {
+      const vert = createShader(gl.VERTEX_SHADER, vertSource);
+      const frag = createShader(gl.FRAGMENT_SHADER, fragSource);
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vert);
+      gl.attachShader(prog, frag);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+      }
+      return prog;
+    }
+
+    function buildControls(inputs) {
+      controlsEl.innerHTML = '';
+      isfInputs = inputs || [];
+
+      isfInputs.forEach(input => {
+        const div = document.createElement('div');
+        div.className = 'control';
+
+        const label = document.createElement('label');
+        label.textContent = input.LABEL || input.NAME;
+        div.appendChild(label);
+
+        let control;
+
+        if (input.TYPE === 'float') {
+          control = document.createElement('input');
+          control.type = 'range';
+          control.min = input.MIN ?? 0;
+          control.max = input.MAX ?? 1;
+          control.step = 0.01;
+          control.value = input.DEFAULT ?? 0.5;
+          control.addEventListener('input', () => input._value = parseFloat(control.value));
+          input._value = parseFloat(control.value);
+        } else if (input.TYPE === 'bool') {
+          control = document.createElement('input');
+          control.type = 'checkbox';
+          control.checked = input.DEFAULT ?? false;
+          control.addEventListener('change', () => input._value = control.checked);
+          input._value = control.checked;
+        } else if (input.TYPE === 'long') {
+          control = document.createElement('select');
+          (input.VALUES || []).forEach((val, i) => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = input.LABELS ? input.LABELS[i] : val;
+            if (val === input.DEFAULT) opt.selected = true;
+            control.appendChild(opt);
+          });
+          control.addEventListener('change', () => input._value = parseInt(control.value));
+          input._value = input.DEFAULT ?? 0;
+        } else if (input.TYPE === 'color') {
+          control = document.createElement('input');
+          control.type = 'color';
+          const def = input.DEFAULT || [1, 1, 1, 1];
+          control.value = rgbToHex(def[0], def[1], def[2]);
+          control.addEventListener('input', () => {
+            const rgb = hexToRgb(control.value);
+            input._value = [rgb.r, rgb.g, rgb.b, 1.0];
+          });
+          input._value = def;
+        } else {
+          return;
+        }
+
+        div.appendChild(control);
+        controlsEl.appendChild(div);
+      });
+    }
+
+    function rgbToHex(r, g, b) {
+      const toHex = c => Math.round(c * 255).toString(16).padStart(2, '0');
+      return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+    }
+
+    function hexToRgb(hex) {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? {
+        r: parseInt(result[1], 16) / 255,
+        g: parseInt(result[2], 16) / 255,
+        b: parseInt(result[3], 16) / 255
+      } : { r: 1, g: 1, b: 1 };
+    }
+
+    function loadShader(source) {
+      errorEl.textContent = '';
+      try {
+        const { metadata, glsl } = parseISF(source);
+
+        let inputUniforms = '';
+        (metadata.INPUTS || []).forEach(input => {
+          if (input.TYPE === 'float') inputUniforms += `uniform float ${input.NAME};\n`;
+          else if (input.TYPE === 'bool') inputUniforms += `uniform bool ${input.NAME};\n`;
+          else if (input.TYPE === 'long') inputUniforms += `uniform int ${input.NAME};\n`;
+          else if (input.TYPE === 'color') inputUniforms += `uniform vec4 ${input.NAME};\n`;
+          else if (input.TYPE === 'point2D') inputUniforms += `uniform vec2 ${input.NAME};\n`;
+        });
+
+        const fragSource = isfPreamble + inputUniforms + glsl;
+
+        if (program) gl.deleteProgram(program);
+        program = createProgram(vertexShaderSource, fragSource);
+
+        uniforms = {
+          RENDERSIZE: gl.getUniformLocation(program, 'RENDERSIZE'),
+          TIME: gl.getUniformLocation(program, 'TIME'),
+          BEAT: gl.getUniformLocation(program, 'BEAT'),
+          TIMEDELTA: gl.getUniformLocation(program, 'TIMEDELTA'),
+          FRAMEINDEX: gl.getUniformLocation(program, 'FRAMEINDEX'),
+        };
+
+        (metadata.INPUTS || []).forEach(input => {
+          uniforms[input.NAME] = gl.getUniformLocation(program, input.NAME);
+        });
+
+        buildControls(metadata.INPUTS);
+      } catch (e) {
+        errorEl.textContent = 'Shader Error:\n' + e.message;
+      }
+    }
+
+    async function loadSketchShader(filename) {
+      if (shaderCache[filename]) {
+        loadShader(shaderCache[filename]);
+        return;
+      }
+      try {
+        const response = await fetch(`isf/sketches/${filename}`);
+        if (!response.ok) throw new Error(`Failed to load ${filename}`);
+        const source = await response.text();
+        shaderCache[filename] = source;
+        loadShader(source);
+      } catch (e) {
+        errorEl.textContent = 'Load Error:\n' + e.message;
+      }
+    }
+
+    // Build gallery
+    async function buildGallery() {
+      for (const filename of SKETCHES) {
+        try {
+          const response = await fetch(`isf/sketches/${filename}`);
+          if (!response.ok) continue;
+          const source = await response.text();
+          shaderCache[filename] = source;
+
+          const { metadata } = parseISF(source);
+
+          const item = document.createElement('div');
+          item.className = 'shader-item';
+          item.dataset.shader = filename;
+
+          const name = document.createElement('div');
+          name.className = 'name';
+          name.textContent = filename.replace('.fs', '').replace(/^\d+-/, '');
+          item.appendChild(name);
+
+          if (metadata.DESCRIPTION) {
+            const desc = document.createElement('div');
+            desc.className = 'desc';
+            desc.textContent = metadata.DESCRIPTION;
+            item.appendChild(desc);
+          }
+
+          galleryEl.appendChild(item);
+        } catch (e) {
+          console.warn(`Could not load ${filename}:`, e);
+        }
+      }
+    }
+
+    // Gallery click handler
+    galleryEl.addEventListener('click', (e) => {
+      const item = e.target.closest('.shader-item');
+      if (!item) return;
+
+      document.querySelectorAll('.shader-item').forEach(el => el.classList.remove('active'));
+      item.classList.add('active');
+
+      const shader = item.dataset.shader;
+      if (shader === 'default') {
+        loadShader(defaultShader);
+      } else {
+        loadSketchShader(shader);
+      }
+    });
+
+    // Transport controls
+    function togglePlay() {
+      if (isPlaying) {
+        pausedTime += performance.now() - startTime;
+        isPlaying = false;
+        playIcon.style.display = 'block';
+        stopIcon.style.display = 'none';
+      } else {
+        startTime = performance.now();
+        isPlaying = true;
+        playIcon.style.display = 'none';
+        stopIcon.style.display = 'block';
+      }
+    }
+
+    playBtn.addEventListener('click', togglePlay);
+
+    // Setup geometry
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1
+    ]), gl.STATIC_DRAW);
+
+    let lastTime = performance.now();
+    let frameIndex = 0;
+
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins}:${secs.toFixed(1).padStart(4, '0')}`;
+    }
+
+    function formatBarBeat(beat) {
+      const bar = Math.floor(beat / 4) + 1;
+      const beatInBar = Math.floor(beat % 4) + 1;
+      return `${bar}.${beatInBar}`;
+    }
+
+    function render() {
+      const now = performance.now();
+      const delta = (now - lastTime) / 1000;
+      lastTime = now;
+
+      let time;
+      if (isPlaying) {
+        time = (pausedTime + (now - startTime)) / 1000;
+      } else {
+        time = pausedTime / 1000;
+      }
+
+      const bpm = parseFloat(bpmInput.value) || 120;
+      const beat = time * (bpm / 60);
+
+      timeDisplay.textContent = formatTime(time);
+      barBeatDisplay.textContent = formatBarBeat(beat);
+
+      if (program) {
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.useProgram(program);
+
+        gl.uniform2f(uniforms.RENDERSIZE, canvas.width, canvas.height);
+        gl.uniform1f(uniforms.TIME, time);
+        gl.uniform1f(uniforms.BEAT, beat);
+        gl.uniform1f(uniforms.TIMEDELTA, delta);
+        gl.uniform1i(uniforms.FRAMEINDEX, frameIndex);
+
+        isfInputs.forEach(input => {
+          const loc = uniforms[input.NAME];
+          if (loc === null) return;
+          if (input.TYPE === 'float') gl.uniform1f(loc, input._value);
+          else if (input.TYPE === 'bool') gl.uniform1i(loc, input._value ? 1 : 0);
+          else if (input.TYPE === 'long') gl.uniform1i(loc, input._value);
+          else if (input.TYPE === 'color') gl.uniform4fv(loc, input._value);
+        });
+
+        const posAttr = gl.getAttribLocation(program, 'position');
+        gl.enableVertexAttribArray(posAttr);
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.vertexAttribPointer(posAttr, 2, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        frameIndex++;
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    // Initialize
+    buildGallery();
+    loadShader(defaultShader);
+    render();
+  </script>
+</body>
+</html>

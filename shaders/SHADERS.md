@@ -271,6 +271,40 @@ sketches/0012-chromatic-split.fs  →  filters/glitch/fil_rgb_split.fs
 - [ ] Bass tunnel
 - [ ] Hi-hat scatter
 
+## Web Compatibility
+
+ISF shaders can run in browsers via WebGL with a JavaScript runtime to parse metadata and provide uniforms.
+
+### Browser Requirements
+- WebGL-compatible GLSL ES syntax
+- JS library to parse ISF JSON and create uniforms
+- Shims for ISF built-ins (`isf_FragNormCoord`, `RENDERSIZE`, etc.)
+
+### BEAT Shim
+Browsers don't have Ableton Live, but we can simulate `BEAT` at a fixed tempo:
+
+```javascript
+// 120 BPM in 4/4 time: 2 beats per second
+const bpm = 120;
+const beat = (performance.now() / 1000) * (bpm / 60);
+gl.uniform1f(beatLocation, beat);
+```
+
+The `#ifdef VIDEOSYNC` pattern still works—define `VIDEOSYNC` in the shader prefix to enable `BEAT`, or omit it to fall back to `TIME`.
+
+### Libraries
+- [interactive-shader-format-js](https://github.com/msfeldstein/interactive-shader-format-js) — ISF → WebGL renderer
+- [ISF Editor](https://editor.isf.video) — Browser-based ISF editor
+
+### Test Harness
+See `isf-test.html` for a browser-based gallery with transport controls and BPM setting.
+
+To run:
+```bash
+cd shaders && python3 -m http.server 8000
+```
+Then open `http://localhost:8000/isf-test.html`
+
 ## Resources
 
 - [ISF Specification](https://github.com/mrRay/ISF_Spec)
