@@ -40,6 +40,14 @@
       "MAX": 4.0
     },
     {
+      "NAME": "perspective",
+      "LABEL": "Perspective",
+      "TYPE": "float",
+      "DEFAULT": 1.0,
+      "MIN": 0.0,
+      "MAX": 1.0
+    },
+    {
       "NAME": "showDiagonals",
       "LABEL": "Show Diagonals",
       "TYPE": "bool",
@@ -88,28 +96,24 @@ float rectOutline(vec2 uv, vec2 center, vec2 size, float width) {
     return max(max(top, bottom), max(left, right));
 }
 
-// Draw diagonal lines from corners to vanishing point
-float diagonalLines(vec2 uv, vec2 center, vec2 innerSize, vec2 outerSize, float width) {
-    vec2 innerHalf = innerSize * 0.5;
-    vec2 outerHalf = outerSize * 0.5;
+// Draw static diagonal lines from screen corners to center vanishing point
+// Returns intensity and also outputs normalized distance from center (0=center, 1=corner) via depth param
+float diagonalLines(vec2 uv, vec2 center, vec2 cornerOffset, float width, out float depth) {
+    // Four corners
+    vec2 tl = center + vec2(-cornerOffset.x, cornerOffset.y);
+    vec2 tr = center + vec2(cornerOffset.x, cornerOffset.y);
+    vec2 bl = center + vec2(-cornerOffset.x, -cornerOffset.y);
+    vec2 br = center + vec2(cornerOffset.x, -cornerOffset.y);
 
-    // Inner corners (toward center)
-    vec2 iTL = center + vec2(-innerHalf.x, innerHalf.y);
-    vec2 iTR = center + vec2(innerHalf.x, innerHalf.y);
-    vec2 iBL = center + vec2(-innerHalf.x, -innerHalf.y);
-    vec2 iBR = center + vec2(innerHalf.x, -innerHalf.y);
+    // Four diagonal lines from corners to center
+    float d1 = lineSegment(uv, center, tl, width);
+    float d2 = lineSegment(uv, center, tr, width);
+    float d3 = lineSegment(uv, center, bl, width);
+    float d4 = lineSegment(uv, center, br, width);
 
-    // Outer corners
-    vec2 oTL = center + vec2(-outerHalf.x, outerHalf.y);
-    vec2 oTR = center + vec2(outerHalf.x, outerHalf.y);
-    vec2 oBL = center + vec2(-outerHalf.x, -outerHalf.y);
-    vec2 oBR = center + vec2(outerHalf.x, -outerHalf.y);
-
-    // Four diagonal lines
-    float d1 = lineSegment(uv, iTL, oTL, width);
-    float d2 = lineSegment(uv, iTR, oTR, width);
-    float d3 = lineSegment(uv, iBL, oBL, width);
-    float d4 = lineSegment(uv, iBR, oBR, width);
+    // Calculate depth based on distance from center (for fading)
+    float maxDist = length(cornerOffset);
+    depth = length(uv - center) / maxDist;
 
     return max(max(d1, d2), max(d3, d4));
 }
@@ -160,6 +164,12 @@ void main() {
     float baseWidth = screenAspect * 1.3 * zNear;  // ensures exit at zNear
     float baseHeight = baseWidth / screenAspect;
 
+    // Size range (same for both perspective and flat modes)
+    float minWidth = baseWidth / zFar;   // smallest (far)
+    float maxWidth = baseWidth / zNear;  // largest (near)
+    float minHeight = baseHeight / zFar;
+    float maxHeight = baseHeight / zNear;
+
     float totalIntensity = 0.0;
 
     // cycleRate: 0=1/4, 1=1/2, 2=1bar, 3=2bars, 4=4bars, 5=8bars
@@ -174,12 +184,22 @@ void main() {
         // Phase for this rectangle (0 to 1, wraps around)
         float phase = fract(t / beatsPerCycle + float(i) / numRects);
 
-        // True perspective: z decreases linearly, size = 1/z
-        float z = mix(zFar, zNear, phase);
+        // Calculate size based on perspective setting
+        // perspective=1: true 1/z perspective (bunched near center, spread at edges)
+        // perspective=0: linear/even spacing (same distance between all rectangles)
 
-        // Perspective projection: apparent size inversely proportional to depth
-        float w = baseWidth / z;
-        float h = baseHeight / z;
+        // Perspective mode: size = 1/z where z is linear
+        float z = mix(zFar, zNear, phase);
+        float perspW = baseWidth / z;
+        float perspH = baseHeight / z;
+
+        // Flat mode: size varies linearly with phase (even spacing)
+        float flatW = mix(minWidth, maxWidth, phase);
+        float flatH = mix(minHeight, maxHeight, phase);
+
+        // Blend between flat and perspective
+        float w = mix(flatW, perspW, perspective);
+        float h = mix(flatH, perspH, perspective);
 
         // Check if rectangle is still visible (any edge within viewport)
         float halfW = w * 0.5;
@@ -209,21 +229,18 @@ void main() {
         float rect = rectOutline(st, stCenter, vec2(w, h), width);
         totalIntensity += rect * alpha;
 
-        // Draw diagonal lines connecting to next (smaller/farther) rectangle
-        if (showDiagonals && i < n - 1) {
-            float nextPhase = fract(t / beatsPerCycle + float(i + 1) / numRects);
-            float nextZ = mix(zFar, zNear, nextPhase);
-            float nextW = baseWidth / nextZ;
-            float nextH = baseHeight / nextZ;
+    }
 
-            // Only draw diagonals when this rect is larger (closer) than next
-            if (z < nextZ) {
-                float diag = diagonalLines(st, stCenter, vec2(nextW, nextH), vec2(w, h), width * 0.7);
-                float nextNormalizedDepth = (nextZ - zNear) / (zFar - zNear);
-                float diagAlpha = fadeWithDepth ? min(alpha, 1.0 - nextNormalizedDepth) : 1.0;
-                totalIntensity += diag * diagAlpha * 0.5;
-            }
-        }
+    // Draw static diagonal lines from corners to center
+    if (showDiagonals) {
+        // Corner offset in aspect-corrected space (to screen corners)
+        vec2 cornerOffset = vec2(screenAspect * 0.5, 0.5);
+        float diagDepth;
+        float diag = diagonalLines(st, stCenter, cornerOffset, width * 0.7, diagDepth);
+
+        // Fade with depth: brighter at edges, dimmer toward center
+        float diagAlpha = fadeWithDepth ? diagDepth : 1.0;
+        totalIntensity += diag * diagAlpha;
     }
 
     // Draw crosshair at center
