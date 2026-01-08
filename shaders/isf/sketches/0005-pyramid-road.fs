@@ -87,7 +87,7 @@
       "NAME": "opaque",
       "LABEL": "Opaque",
       "TYPE": "bool",
-      "DEFAULT": false
+      "DEFAULT": true
     }
   ]
 }*/
@@ -243,7 +243,7 @@ void main() {
 
     // Perspective projection parameters
     float zFar = 12.0;
-    float zNear = 0.15;  // Smaller zNear so pyramids grow larger before wrapping
+    float zNear = 0.05;  // Very small so pyramids travel fully past camera before wrapping
 
     // Rectangle frame sizing - use a reference zNear for sizing to match grid-tunnel scale
     float zNearRef = 0.4;
@@ -261,24 +261,26 @@ void main() {
     // cycleRate: 0=1/4, 1=1/2, 2=1bar, 3=2bars, 4=4bars, 5=8bars
     float beatsPerCycle = pow(2.0, float(cycleRate));
 
-    int n = int(numPyramids);
+    // Round numPyramids to nearest integer for consistent behavior across slider changes
+    float numPyr = floor(numPyramids + 0.5);
+    int n = int(numPyr);
 
     // Compute draw order mathematically (no sorting needed)
     // Phases are evenly spaced: fract(base + i/n)
     // The pyramid with smallest phase (farthest) is the one that just wrapped
     float basePhase = fract(t / beatsPerCycle);
     // Starting index: which pyramid has the smallest phase (just wrapped past 0)
-    int startIdx = int(mod(ceil((1.0 - basePhase) * numPyramids), numPyramids));
+    int startIdx = int(mod(ceil((1.0 - basePhase) * numPyr), numPyr));
 
     // Draw pyramids in sorted order (back to front)
     for (int di = 0; di < 16; di++) {
         if (di >= n) break;
 
         // Calculate actual pyramid index from draw order
-        int i = int(mod(float(startIdx + di), numPyramids));
+        int i = int(mod(float(startIdx + di), numPyr));
 
         // Calculate this pyramid's total phase (not wrapped) to get stable cycle count
-        float totalPhase = t / beatsPerCycle + float(i) / numPyramids;
+        float totalPhase = t / beatsPerCycle + float(i) / numPyr;
         float phase = fract(totalPhase);
 
         // Cycle count - increments each time THIS pyramid wraps (not others)
@@ -335,12 +337,13 @@ void main() {
         float viewTop = 1.0;
 
         // Skip only if pyramid has FULLY exited the viewport
+        // Don't cull for going below bottom - pyramids should travel fully past camera before wrapping
+        // The frameH calculation makes close pyramids appear "below" screen, but they should still draw
         bool fullyOffLeft = pyrRight < viewLeft;
         bool fullyOffRight = pyrLeft > viewRight;
-        bool fullyOffBottom = pyrTop < viewBottom;
         bool fullyOffTop = pyrBottom > viewTop;
 
-        if (fullyOffLeft || fullyOffRight || fullyOffBottom || fullyOffTop) continue;
+        if (fullyOffLeft || fullyOffRight || fullyOffTop) continue;
 
         // Depth-based fade
         float normalizedDepth = (z - zNear) / (zFar - zNear);
