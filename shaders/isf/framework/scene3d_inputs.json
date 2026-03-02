@@ -1,0 +1,45 @@
+{
+  "_comment": "Paste these into your ISF INPUTS array for unified 3D camera control. All shaders sharing these inputs will have identical perspective when composited.",
+  "camera_inputs": [
+    {
+      "NAME": "camDistance",
+      "LABEL": "Camera Distance",
+      "TYPE": "float",
+      "DEFAULT": 5.0,
+      "MIN": 1.0,
+      "MAX": 20.0
+    },
+    {
+      "NAME": "camHeight",
+      "LABEL": "Camera Height",
+      "TYPE": "float",
+      "DEFAULT": 2.0,
+      "MIN": -5.0,
+      "MAX": 10.0
+    },
+    {
+      "NAME": "camPitch",
+      "LABEL": "Camera Pitch",
+      "TYPE": "float",
+      "DEFAULT": 0.3,
+      "MIN": -1.5708,
+      "MAX": 1.5708
+    },
+    {
+      "NAME": "camYaw",
+      "LABEL": "Camera Yaw",
+      "TYPE": "float",
+      "DEFAULT": 0.0,
+      "MIN": -3.14159,
+      "MAX": 3.14159
+    },
+    {
+      "NAME": "fov",
+      "LABEL": "Field of View",
+      "TYPE": "float",
+      "DEFAULT": 1.0,
+      "MIN": 0.2,
+      "MAX": 3.0
+    }
+  ]
+}

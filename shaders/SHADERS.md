@@ -51,6 +51,15 @@ shaders/
 │   │   ├── masks/             # Alpha generation, shape masks
 │   │   └── audio/             # Audio-reactive modulators
 │   │
+│   ├── framework/          # Unified 3D scene framework
+│   │   ├── scene3d.fs            # ISF version (standalone demo)
+│   │   ├── scene3d.webgl.vert    # WebGL vertex shader
+│   │   ├── scene3d.webgl.frag    # WebGL fragment shader
+│   │   ├── scene3d.gl.vert       # Desktop GL 330 vertex shader
+│   │   ├── scene3d.gl.frag       # Desktop GL 330 fragment shader
+│   │   ├── scene3d_include.glsl  # Copy-paste include for any shader
+│   │   └── scene3d_inputs.json   # Standard camera ISF inputs
+│   │
 │   ├── presets/            # Curated combinations for performance
 │   │
 │   └── sketches/           # Work-in-progress experiments (NNNN-name.fs)
@@ -311,6 +320,96 @@ To run:
 cd shaders && python3 -m http.server 8000
 ```
 Then open `http://localhost:8000/isf-test.html`
+
+## Unified 3D Framework (scene3d)
+
+All visualizations — even 2D representations — use a shared 3D camera and projection system so that layers composite as one scene when stacked.
+
+### Why
+
+When multiple shaders render separate layers (e.g. ground grid + pyramids + tunnel), they must share **identical camera parameters** to align perfectly. The scene3d framework provides:
+
+- **Shared camera** — orbital camera with distance, height, yaw, pitch, FOV
+- **Shared projection** — consistent perspective projection across all layers
+- **Shared coordinate system** — right-handed: X=right, Y=up, Z=forward
+- **Three shader versions** — ISF, WebGL, desktop GL (all share the same math)
+
+### Versions
+
+| File | Format | Use Case |
+|------|--------|----------|
+| `scene3d.fs` | ISF 2.0 | Videosync, VDMX, any ISF host |
+| `scene3d.webgl.vert/frag` | GLSL ES 1.0 | Browser / WebGL |
+| `scene3d.gl.vert/frag` | GLSL 330 core | Desktop OpenGL |
+| `scene3d_include.glsl` | Portable GLSL | Copy-paste into any shader |
+| `scene3d_inputs.json` | JSON | Standard ISF camera inputs |
+
+### Usage — Adding the Framework to a Shader
+
+1. **Copy the camera INPUTS** from `scene3d_inputs.json` into your ISF metadata
+2. **Paste** the `scene3d_include.glsl` block into your shader
+3. **Initialize** in `main()`:
+
+```glsl
+Scene3D cam = scene3d_setup(
+    isf_FragNormCoord, RENDERSIZE,
+    camDistance, camHeight, camYaw, camPitch, fov
+);
+```
+
+4. **Use the API** to draw your content:
+
+```glsl
+// Project a 3D point to screen
+vec3 screenPt = scene3d_projectPt(vec3(1.0, 0.0, -5.0), cam);
+
+// Draw a 3D line (returns intensity 0-1)
+float line = scene3d_drawLine(cam.uv, vec3(0.0), vec3(1.0, 1.0, 0.0), cam, 1.5);
+
+// Draw ground grid
+float grid = scene3d_drawGrid(cam, 1.0, 20.0, 1.5);
+
+// Ray-plane intersection (ground plane at y=0)
+vec4 hit = scene3d_planePos(cam, 0.0);  // .w = 1.0 if hit
+
+// Depth-based fade
+float fade = scene3d_depthFade(screenPt.z, 1.0, 50.0);
+```
+
+### Camera Parameters
+
+All shaders sharing these parameters will have identical perspective:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `camDistance` | 5.0 | Distance from origin |
+| `camHeight` | 2.0 | Camera Y position |
+| `camPitch` | 0.3 | Vertical angle (radians) |
+| `camYaw` | 0.0 | Horizontal angle (radians) |
+| `fov` | 1.0 | Field of view scale |
+
+### Performance Notes
+
+- **No branching in core math** — all projection is pure arithmetic
+- **Early-out for behind-camera** — lines/points behind camera return immediately
+- **Depth-scaled line width** — thinner lines at distance = fewer pixels to anti-alias
+- **Grid uses analytical derivatives** — no texture sampling, no multi-pass
+- Each shader is one layer — keep per-layer cost low for compositing
+
+### Compositing Layers
+
+To composite multiple scene3d layers in Videosync:
+
+1. Set all layers to the **same camera values** (camDistance, camHeight, camPitch, camYaw, fov)
+2. Use **additive blending** (black background + white lines)
+3. Each layer's `bgColor` should be `[0, 0, 0, 1]`
+4. Stack as many layers as needed — the shared perspective ensures alignment
+
+### Example Sketches Using the Framework
+
+- `0006-pyramid-road-3d.fs` — Wireframe pyramids in true 3D space
+- `0007-grid-tunnel-3d.fs` — Rectangle tunnel with depth
+- `0008-scifi-grid-3d.fs` — Infinite ground grid with scan lines
 
 ## Resources
 
