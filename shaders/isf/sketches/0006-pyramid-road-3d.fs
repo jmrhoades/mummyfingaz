@@ -1,7 +1,7 @@
 /*{
   "ISFVSN": "2",
   "CATEGORIES": ["Generator", "Pattern"],
-  "DESCRIPTION": "Wireframe pyramids on the unified 3D scene framework — composable layer",
+  "DESCRIPTION": "Wireframe pyramids on the infinite tunnel conveyor belt — spaceship viewport layer",
   "CREDIT": "Mummyfingaz",
   "INPUTS": [
     {
@@ -45,6 +45,22 @@
       "MAX": 3.0
     },
     {
+      "NAME": "tunnelSpeed",
+      "LABEL": "Tunnel Speed",
+      "TYPE": "float",
+      "DEFAULT": 2.0,
+      "MIN": 0.0,
+      "MAX": 10.0
+    },
+    {
+      "NAME": "tunnelDepth",
+      "LABEL": "Tunnel Depth",
+      "TYPE": "float",
+      "DEFAULT": 50.0,
+      "MIN": 10.0,
+      "MAX": 100.0
+    },
+    {
       "NAME": "lineColor",
       "LABEL": "Line Color",
       "TYPE": "color",
@@ -55,14 +71,6 @@
       "LABEL": "Background Color",
       "TYPE": "color",
       "DEFAULT": [0.0, 0.0, 0.0, 1.0]
-    },
-    {
-      "NAME": "cycleRate",
-      "LABEL": "Cycle Rate",
-      "TYPE": "long",
-      "DEFAULT": 2,
-      "VALUES": [0, 1, 2, 3, 4, 5],
-      "LABELS": ["1/4", "1/2", "1 Bar", "2 Bars", "4 Bars", "8 Bars"]
     },
     {
       "NAME": "numPyramids",
@@ -92,7 +100,7 @@
       "NAME": "rotationSpeed",
       "LABEL": "Rotation Speed",
       "TYPE": "float",
-      "DEFAULT": 0.0,
+      "DEFAULT": 0.5,
       "MIN": 0.0,
       "MAX": 2.0
     },
@@ -105,24 +113,10 @@
       "MAX": 10.0
     },
     {
-      "NAME": "roadLength",
-      "LABEL": "Road Length",
-      "TYPE": "float",
-      "DEFAULT": 30.0,
-      "MIN": 10.0,
-      "MAX": 60.0
-    },
-    {
-      "NAME": "fadeWithDepth",
-      "LABEL": "Fade with Depth",
+      "NAME": "showGrid",
+      "LABEL": "Scrolling Grid",
       "TYPE": "bool",
       "DEFAULT": true
-    },
-    {
-      "NAME": "showGrid",
-      "LABEL": "Ground Grid",
-      "TYPE": "bool",
-      "DEFAULT": false
     }
   ]
 }*/
@@ -130,6 +124,10 @@
 // ============================================================
 // scene3d_include.glsl — UNIFIED 3D FRAMEWORK
 // ============================================================
+
+float scene3d_hash(float n) {
+    return fract(sin(n * 127.1) * 43758.5453);
+}
 
 struct Scene3D {
     vec2  uv;
@@ -141,6 +139,10 @@ struct Scene3D {
     vec3  up;
     float fovScale;
     float pxSize;
+    float scroll;
+    float depth;
+    float speed;
+    float time;
 };
 
 vec3 _s3d_camPos(float dist, float height, float yaw) {
@@ -173,7 +175,8 @@ vec3 _s3d_rayDir(vec2 uv, float aspect, float pitch,
 
 Scene3D scene3d_setup(vec2 uv, vec2 resolution,
                        float dist, float height,
-                       float yaw, float pitch, float fovIn) {
+                       float yaw, float pitch, float fovIn,
+                       float tSpeed, float tDepth, float time) {
     Scene3D cam;
     cam.uv       = uv;
     cam.aspect   = resolution.x / resolution.y;
@@ -188,6 +191,10 @@ Scene3D scene3d_setup(vec2 uv, vec2 resolution,
     float sp = sin(pitch);
     cam.fw = fw0 * cp + u0 * sp;
     cam.up = u0 * cp - fw0 * sp;
+    cam.speed  = tSpeed;
+    cam.depth  = tDepth;
+    cam.time   = time;
+    cam.scroll = time * tSpeed;
     return cam;
 }
 
@@ -214,11 +221,33 @@ float scene3d_drawLine(vec2 uv, vec3 a3d, vec3 b3d, Scene3D cam, float widthPx) 
     return 1.0 - smoothstep(0.0, w, d);
 }
 
-float scene3d_drawGrid(Scene3D cam, float spacing, float fadeDistance, float lineW) {
-    if (abs(cam.rd.y) < 0.0001) return 0.0;
-    float t = -cam.ro.y / cam.rd.y;
+vec4 scene3d_slot(Scene3D cam, int index, int count) {
+    float n = float(count);
+    float basePhase = cam.scroll / cam.depth;
+    float totalPhase = basePhase + float(index) / n;
+    float phase = fract(totalPhase);
+    float cycle = floor(totalPhase);
+    float z = -cam.depth * (1.0 - phase);
+    float id = cycle * n + float(index);
+    return vec4(0.0, 0.0, z, id);
+}
+
+float scene3d_slotFade(Scene3D cam, float z) {
+    return clamp(1.0 + z / cam.depth, 0.0, 1.0);
+}
+
+float scene3d_planeHit(Scene3D cam, float planeY) {
+    if (abs(cam.rd.y) < 0.0001) return -1.0;
+    float t = (planeY - cam.ro.y) / cam.rd.y;
+    return t > 0.0 ? t : -1.0;
+}
+
+float scene3d_scrollGrid(Scene3D cam, float spacing, float fadeDistance, float lineW) {
+    float t = scene3d_planeHit(cam, 0.0);
     if (t < 0.0) return 0.0;
     vec3 hitPos = cam.ro + cam.rd * t;
+    float scrollMod = mod(cam.scroll, spacing * 256.0);
+    hitPos.z -= scrollMod;
     vec2 gridUV = hitPos.xz / spacing;
     float derivScale = t * 0.002;
     vec2 gridDeriv = vec2(derivScale);
@@ -239,56 +268,43 @@ float scene3d_depthFade(float depth, float nearClip, float farClip) {
 // END scene3d_include
 // ============================================================
 
-// Pseudo-random hash
-float hash(float n) {
-    return fract(sin(n * 12.9898) * 43758.5453);
-}
 
-// Draw a wireframe pyramid in 3D world space
-// base: center of base on ground (y=0), sz: base half-width, ht: apex height
-// angle: Y-axis rotation, cam: Scene3D, lw: line width in pixels
+// Draw wireframe pyramid at a world-space base position
 float drawPyramid(vec3 base, float sz, float ht, float angle, Scene3D cam, float lw) {
-    // Four base corners in local XZ, rotated around Y
     float ca = cos(angle);
     float sa = sin(angle);
 
-    vec3 corners[4];
-    // Local corners before rotation
     vec2 lc0 = vec2(-sz, -sz);
     vec2 lc1 = vec2( sz, -sz);
     vec2 lc2 = vec2( sz,  sz);
     vec2 lc3 = vec2(-sz,  sz);
 
-    // Rotate and offset to world
-    corners[0] = base + vec3(lc0.x * ca - lc0.y * sa, 0.0, lc0.x * sa + lc0.y * ca);
-    corners[1] = base + vec3(lc1.x * ca - lc1.y * sa, 0.0, lc1.x * sa + lc1.y * ca);
-    corners[2] = base + vec3(lc2.x * ca - lc2.y * sa, 0.0, lc2.x * sa + lc2.y * ca);
-    corners[3] = base + vec3(lc3.x * ca - lc3.y * sa, 0.0, lc3.x * sa + lc3.y * ca);
+    vec3 c0 = base + vec3(lc0.x * ca - lc0.y * sa, 0.0, lc0.x * sa + lc0.y * ca);
+    vec3 c1 = base + vec3(lc1.x * ca - lc1.y * sa, 0.0, lc1.x * sa + lc1.y * ca);
+    vec3 c2 = base + vec3(lc2.x * ca - lc2.y * sa, 0.0, lc2.x * sa + lc2.y * ca);
+    vec3 c3 = base + vec3(lc3.x * ca - lc3.y * sa, 0.0, lc3.x * sa + lc3.y * ca);
 
     vec3 apex = base + vec3(0.0, ht, 0.0);
 
-    float intensity = 0.0;
-
+    float i = 0.0;
     // Base edges
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[0], corners[1], cam, lw));
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[1], corners[2], cam, lw));
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[2], corners[3], cam, lw));
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[3], corners[0], cam, lw));
-
+    i = max(i, scene3d_drawLine(cam.uv, c0, c1, cam, lw));
+    i = max(i, scene3d_drawLine(cam.uv, c1, c2, cam, lw));
+    i = max(i, scene3d_drawLine(cam.uv, c2, c3, cam, lw));
+    i = max(i, scene3d_drawLine(cam.uv, c3, c0, cam, lw));
     // Apex edges
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[0], apex, cam, lw));
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[1], apex, cam, lw));
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[2], apex, cam, lw));
-    intensity = max(intensity, scene3d_drawLine(cam.uv, corners[3], apex, cam, lw));
+    i = max(i, scene3d_drawLine(cam.uv, c0, apex, cam, lw));
+    i = max(i, scene3d_drawLine(cam.uv, c1, apex, cam, lw));
+    i = max(i, scene3d_drawLine(cam.uv, c2, apex, cam, lw));
+    i = max(i, scene3d_drawLine(cam.uv, c3, apex, cam, lw));
 
-    return intensity;
+    return i;
 }
 
 
 void main() {
     vec2 uv = isf_FragNormCoord;
 
-    // Time
     float t;
     #ifdef VIDEOSYNC
         t = BEAT;
@@ -296,58 +312,38 @@ void main() {
         t = TIME;
     #endif
 
-    // Setup unified 3D camera
+    // Setup camera + tunnel
     Scene3D cam = scene3d_setup(uv, RENDERSIZE,
-                                 camDistance, camHeight, camYaw, camPitch, fov);
+                                 camDistance, camHeight, camYaw, camPitch, fov,
+                                 tunnelSpeed, tunnelDepth, t);
 
     float intensity = 0.0;
 
-    // Optional ground grid
+    // Scrolling cockpit floor grid
     if (showGrid) {
-        intensity += scene3d_drawGrid(cam, 1.0, 30.0, 1.5) * 0.3;
+        intensity += scene3d_scrollGrid(cam, 1.0, 30.0, 1.5) * 0.3;
     }
 
-    // Cycle timing
-    float beatsPerCycle = pow(2.0, float(cycleRate));
-    float numPyr = floor(numPyramids + 0.5);
-    int n = int(numPyr);
-
-    // Draw pyramids traveling down the -Z axis
+    // Pyramids on the conveyor belt
+    int n = int(numPyramids);
     for (int i = 0; i < 16; i++) {
         if (i >= n) break;
 
-        float totalPhase = t / beatsPerCycle + float(i) / numPyr;
-        float phase = fract(totalPhase);
-        float cycleCount = floor(totalPhase);
-        float pyramidID = cycleCount * 100.0 + float(i);
+        // Get slot position + unique ID from the conveyor
+        vec4 slot = scene3d_slot(cam, i, n);
+        float id = slot.w;
+        float fade = scene3d_slotFade(cam, slot.z);
 
-        // World-space Z position: travel from far to near along -Z
-        float z = mix(-roadLength, 2.0, phase);
-
-        // Random X offset
-        float randX = (hash(pyramidID * 7.3) * 2.0 - 1.0) * spreadX;
-
-        // Pyramid size (with optional random variation)
-        float sz = pyramidSize * 0.5 * (0.7 + hash(pyramidID * 23.1) * 0.6);
+        // Randomize from ID — different every wrap, no memory
+        float xPos = (scene3d_hash(id * 7.3) - 0.5) * spreadX * 2.0;
+        float sz = pyramidSize * 0.5 * (0.7 + scene3d_hash(id * 23.1) * 0.6);
         float ht = sz * 1.7;
+        float angle = t * rotationSpeed * 3.14159 + scene3d_hash(id * 13.7) * 6.28318;
 
-        // Y-axis rotation
-        float angle = t * rotationSpeed * 3.14159 + hash(pyramidID * 13.7) * 6.28318;
+        vec3 base = vec3(xPos, 0.0, slot.z);
 
-        // Base center on the ground plane
-        vec3 base = vec3(randX, 0.0, z);
-
-        // Draw
         float pyr = drawPyramid(base, sz, ht, angle, cam, lineWidth);
-
-        // Depth fade
-        if (fadeWithDepth) {
-            vec3 projected = scene3d_projectPt(base, cam);
-            float fade = scene3d_depthFade(projected.z, 1.0, roadLength);
-            pyr *= fade;
-        }
-
-        intensity = max(intensity, pyr);
+        intensity = max(intensity, pyr * fade);
     }
 
     intensity = clamp(intensity, 0.0, 1.0);

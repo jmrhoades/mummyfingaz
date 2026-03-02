@@ -1,7 +1,7 @@
 /*{
   "ISFVSN": "2",
   "CATEGORIES": ["Generator", "Pattern"],
-  "DESCRIPTION": "Grid tunnel on the unified 3D scene framework — rectangles rush toward camera",
+  "DESCRIPTION": "Infinite rectangle tunnel on the conveyor belt — spaceship corridor viewport",
   "CREDIT": "Mummyfingaz",
   "INPUTS": [
     {
@@ -45,6 +45,22 @@
       "MAX": 3.0
     },
     {
+      "NAME": "tunnelSpeed",
+      "LABEL": "Tunnel Speed",
+      "TYPE": "float",
+      "DEFAULT": 2.0,
+      "MIN": 0.0,
+      "MAX": 10.0
+    },
+    {
+      "NAME": "tunnelDepth",
+      "LABEL": "Tunnel Depth",
+      "TYPE": "float",
+      "DEFAULT": 50.0,
+      "MIN": 10.0,
+      "MAX": 100.0
+    },
+    {
       "NAME": "lineColor",
       "LABEL": "Line Color",
       "TYPE": "color",
@@ -57,20 +73,12 @@
       "DEFAULT": [0.0, 0.0, 0.0, 1.0]
     },
     {
-      "NAME": "cycleRate",
-      "LABEL": "Cycle Rate",
-      "TYPE": "long",
-      "DEFAULT": 2,
-      "VALUES": [0, 1, 2, 3, 4, 5],
-      "LABELS": ["1/4", "1/2", "1 Bar", "2 Bars", "4 Bars", "8 Bars"]
-    },
-    {
       "NAME": "numRects",
       "LABEL": "Number of Rectangles",
       "TYPE": "float",
-      "DEFAULT": 6.0,
+      "DEFAULT": 8.0,
       "MIN": 2.0,
-      "MAX": 12.0
+      "MAX": 16.0
     },
     {
       "NAME": "lineWidth",
@@ -97,28 +105,14 @@
       "MAX": 8.0
     },
     {
-      "NAME": "tunnelLength",
-      "LABEL": "Tunnel Length",
-      "TYPE": "float",
-      "DEFAULT": 40.0,
-      "MIN": 10.0,
-      "MAX": 80.0
-    },
-    {
-      "NAME": "showDiagonals",
-      "LABEL": "Show Diagonals",
-      "TYPE": "bool",
-      "DEFAULT": true
-    },
-    {
-      "NAME": "fadeWithDepth",
-      "LABEL": "Fade with Depth",
+      "NAME": "showRails",
+      "LABEL": "Show Rails",
       "TYPE": "bool",
       "DEFAULT": true
     },
     {
       "NAME": "showGrid",
-      "LABEL": "Ground Grid",
+      "LABEL": "Scrolling Grid",
       "TYPE": "bool",
       "DEFAULT": false
     }
@@ -128,6 +122,10 @@
 // ============================================================
 // scene3d_include.glsl — UNIFIED 3D FRAMEWORK
 // ============================================================
+
+float scene3d_hash(float n) {
+    return fract(sin(n * 127.1) * 43758.5453);
+}
 
 struct Scene3D {
     vec2  uv;
@@ -139,6 +137,10 @@ struct Scene3D {
     vec3  up;
     float fovScale;
     float pxSize;
+    float scroll;
+    float depth;
+    float speed;
+    float time;
 };
 
 vec3 _s3d_camPos(float dist, float height, float yaw) {
@@ -171,7 +173,8 @@ vec3 _s3d_rayDir(vec2 uv, float aspect, float pitch,
 
 Scene3D scene3d_setup(vec2 uv, vec2 resolution,
                        float dist, float height,
-                       float yaw, float pitch, float fovIn) {
+                       float yaw, float pitch, float fovIn,
+                       float tSpeed, float tDepth, float time) {
     Scene3D cam;
     cam.uv       = uv;
     cam.aspect   = resolution.x / resolution.y;
@@ -186,6 +189,10 @@ Scene3D scene3d_setup(vec2 uv, vec2 resolution,
     float sp = sin(pitch);
     cam.fw = fw0 * cp + u0 * sp;
     cam.up = u0 * cp - fw0 * sp;
+    cam.speed  = tSpeed;
+    cam.depth  = tDepth;
+    cam.time   = time;
+    cam.scroll = time * tSpeed;
     return cam;
 }
 
@@ -212,11 +219,33 @@ float scene3d_drawLine(vec2 uv, vec3 a3d, vec3 b3d, Scene3D cam, float widthPx) 
     return 1.0 - smoothstep(0.0, w, d);
 }
 
-float scene3d_drawGrid(Scene3D cam, float spacing, float fadeDistance, float lineW) {
-    if (abs(cam.rd.y) < 0.0001) return 0.0;
-    float t = -cam.ro.y / cam.rd.y;
+vec4 scene3d_slot(Scene3D cam, int index, int count) {
+    float n = float(count);
+    float basePhase = cam.scroll / cam.depth;
+    float totalPhase = basePhase + float(index) / n;
+    float phase = fract(totalPhase);
+    float cycle = floor(totalPhase);
+    float z = -cam.depth * (1.0 - phase);
+    float id = cycle * n + float(index);
+    return vec4(0.0, 0.0, z, id);
+}
+
+float scene3d_slotFade(Scene3D cam, float z) {
+    return clamp(1.0 + z / cam.depth, 0.0, 1.0);
+}
+
+float scene3d_planeHit(Scene3D cam, float planeY) {
+    if (abs(cam.rd.y) < 0.0001) return -1.0;
+    float t = (planeY - cam.ro.y) / cam.rd.y;
+    return t > 0.0 ? t : -1.0;
+}
+
+float scene3d_scrollGrid(Scene3D cam, float spacing, float fadeDistance, float lineW) {
+    float t = scene3d_planeHit(cam, 0.0);
     if (t < 0.0) return 0.0;
     vec3 hitPos = cam.ro + cam.rd * t;
+    float scrollMod = mod(cam.scroll, spacing * 256.0);
+    hitPos.z -= scrollMod;
     vec2 gridUV = hitPos.xz / spacing;
     float derivScale = t * 0.002;
     vec2 gridDeriv = vec2(derivScale);
@@ -237,29 +266,10 @@ float scene3d_depthFade(float depth, float nearClip, float farClip) {
 // END scene3d_include
 // ============================================================
 
-// Draw a 3D rectangle outline at a given Z depth
-// center: center of the rect in world space
-// hw, hh: half-width and half-height
-float drawRectOutline(vec3 center, float hw, float hh, Scene3D cam, float lw) {
-    // Four corners of the rectangle (in the XY plane at center.z)
-    vec3 tl = center + vec3(-hw,  hh, 0.0);
-    vec3 tr = center + vec3( hw,  hh, 0.0);
-    vec3 bl = center + vec3(-hw, -hh, 0.0);
-    vec3 br = center + vec3( hw, -hh, 0.0);
-
-    float i = 0.0;
-    i = max(i, scene3d_drawLine(cam.uv, tl, tr, cam, lw));
-    i = max(i, scene3d_drawLine(cam.uv, tr, br, cam, lw));
-    i = max(i, scene3d_drawLine(cam.uv, br, bl, cam, lw));
-    i = max(i, scene3d_drawLine(cam.uv, bl, tl, cam, lw));
-
-    return i;
-}
 
 void main() {
     vec2 uv = isf_FragNormCoord;
 
-    // Time
     float t;
     #ifdef VIDEOSYNC
         t = BEAT;
@@ -267,70 +277,64 @@ void main() {
         t = TIME;
     #endif
 
-    // Setup unified 3D camera
     Scene3D cam = scene3d_setup(uv, RENDERSIZE,
-                                 camDistance, camHeight, camYaw, camPitch, fov);
+                                 camDistance, camHeight, camYaw, camPitch, fov,
+                                 tunnelSpeed, tunnelDepth, t);
 
     float intensity = 0.0;
 
-    // Optional ground grid
+    // Scrolling floor grid
     if (showGrid) {
-        intensity += scene3d_drawGrid(cam, 1.0, 30.0, 1.5) * 0.3;
+        intensity += scene3d_scrollGrid(cam, 1.0, 30.0, 1.5) * 0.3;
     }
 
-    // Cycle timing
-    float beatsPerCycle = pow(2.0, float(cycleRate));
-    int n = int(numRects);
-
-    // Tunnel center is at the look-at target (origin) height offset
-    float tunnelCenterY = tunnelHeight * 0.5;
     float hw = tunnelWidth * 0.5;
     float hh = tunnelHeight * 0.5;
+    float centerY = tunnelHeight * 0.5;
+    int n = int(numRects);
 
-    // Draw rectangles traveling down -Z
-    for (int i = 0; i < 12; i++) {
+    // Rectangle frames on the conveyor belt
+    for (int i = 0; i < 16; i++) {
         if (i >= n) break;
 
-        float phase = fract(t / beatsPerCycle + float(i) / numRects);
+        vec4 slot = scene3d_slot(cam, i, n);
+        float fade = scene3d_slotFade(cam, slot.z);
 
-        // Z position: from far to near
-        float z = mix(-tunnelLength, 2.0, phase);
+        // Rectangle center in world space — all at same XY, riding the belt
+        vec3 center = vec3(0.0, centerY, slot.z);
 
-        // Rectangle center in world space
-        vec3 center = vec3(0.0, tunnelCenterY, z);
+        // Four corners
+        vec3 tl = center + vec3(-hw,  hh, 0.0);
+        vec3 tr = center + vec3( hw,  hh, 0.0);
+        vec3 bl = center + vec3(-hw, -hh, 0.0);
+        vec3 br = center + vec3( hw, -hh, 0.0);
 
-        float rect = drawRectOutline(center, hw, hh, cam, lineWidth);
+        float rect = 0.0;
+        rect = max(rect, scene3d_drawLine(cam.uv, tl, tr, cam, lineWidth));
+        rect = max(rect, scene3d_drawLine(cam.uv, tr, br, cam, lineWidth));
+        rect = max(rect, scene3d_drawLine(cam.uv, br, bl, cam, lineWidth));
+        rect = max(rect, scene3d_drawLine(cam.uv, bl, tl, cam, lineWidth));
 
-        // Depth fade
-        if (fadeWithDepth) {
-            vec3 projected = scene3d_projectPt(center, cam);
-            if (projected.z > 0.0) {
-                float fade = scene3d_depthFade(projected.z, 1.0, tunnelLength);
-                rect *= fade;
-            }
-        }
-
-        intensity += rect;
+        intensity += rect * fade;
     }
 
-    // Static diagonal lines from tunnel mouth corners to vanishing point
-    if (showDiagonals) {
-        float farZ = -tunnelLength;
-        float nearZ = 2.0;
+    // Rail lines along tunnel edges (connect near to far)
+    if (showRails) {
+        float nearZ = 0.0;
+        float farZ = -tunnelDepth;
 
-        // Four rail lines along tunnel edges
         intensity += scene3d_drawLine(cam.uv,
             vec3(-hw, 0.0, nearZ), vec3(-hw, 0.0, farZ),
-            cam, lineWidth * 0.7) * 0.5;
+            cam, lineWidth * 0.5) * 0.4;
         intensity += scene3d_drawLine(cam.uv,
             vec3( hw, 0.0, nearZ), vec3( hw, 0.0, farZ),
-            cam, lineWidth * 0.7) * 0.5;
+            cam, lineWidth * 0.5) * 0.4;
         intensity += scene3d_drawLine(cam.uv,
             vec3(-hw, tunnelHeight, nearZ), vec3(-hw, tunnelHeight, farZ),
-            cam, lineWidth * 0.7) * 0.5;
+            cam, lineWidth * 0.5) * 0.4;
         intensity += scene3d_drawLine(cam.uv,
             vec3( hw, tunnelHeight, nearZ), vec3( hw, tunnelHeight, farZ),
-            cam, lineWidth * 0.7) * 0.5;
+            cam, lineWidth * 0.5) * 0.4;
     }
 
     intensity = clamp(intensity, 0.0, 1.0);

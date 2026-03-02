@@ -1,7 +1,7 @@
 /*{
   "ISFVSN": "2",
   "CATEGORIES": ["Generator", "Pattern"],
-  "DESCRIPTION": "Sci-fi ground grid on unified 3D framework — infinite floor with scan lines",
+  "DESCRIPTION": "Scrolling sci-fi cockpit floor — infinite ground grid with scan lines on the conveyor",
   "CREDIT": "Mummyfingaz",
   "INPUTS": [
     {
@@ -43,6 +43,22 @@
       "DEFAULT": 1.0,
       "MIN": 0.2,
       "MAX": 3.0
+    },
+    {
+      "NAME": "tunnelSpeed",
+      "LABEL": "Tunnel Speed",
+      "TYPE": "float",
+      "DEFAULT": 2.0,
+      "MIN": 0.0,
+      "MAX": 10.0
+    },
+    {
+      "NAME": "tunnelDepth",
+      "LABEL": "Tunnel Depth",
+      "TYPE": "float",
+      "DEFAULT": 50.0,
+      "MIN": 10.0,
+      "MAX": 100.0
     },
     {
       "NAME": "lineColor",
@@ -109,6 +125,10 @@
 // scene3d_include.glsl — UNIFIED 3D FRAMEWORK
 // ============================================================
 
+float scene3d_hash(float n) {
+    return fract(sin(n * 127.1) * 43758.5453);
+}
+
 struct Scene3D {
     vec2  uv;
     float aspect;
@@ -119,6 +139,10 @@ struct Scene3D {
     vec3  up;
     float fovScale;
     float pxSize;
+    float scroll;
+    float depth;
+    float speed;
+    float time;
 };
 
 vec3 _s3d_camPos(float dist, float height, float yaw) {
@@ -151,7 +175,8 @@ vec3 _s3d_rayDir(vec2 uv, float aspect, float pitch,
 
 Scene3D scene3d_setup(vec2 uv, vec2 resolution,
                        float dist, float height,
-                       float yaw, float pitch, float fovIn) {
+                       float yaw, float pitch, float fovIn,
+                       float tSpeed, float tDepth, float time) {
     Scene3D cam;
     cam.uv       = uv;
     cam.aspect   = resolution.x / resolution.y;
@@ -166,45 +191,27 @@ Scene3D scene3d_setup(vec2 uv, vec2 resolution,
     float sp = sin(pitch);
     cam.fw = fw0 * cp + u0 * sp;
     cam.up = u0 * cp - fw0 * sp;
+    cam.speed  = tSpeed;
+    cam.depth  = tDepth;
+    cam.time   = time;
+    cam.scroll = time * tSpeed;
     return cam;
 }
 
-vec3 scene3d_projectPt(vec3 worldPos, Scene3D cam) {
-    vec3 toPoint = worldPos - cam.ro;
-    float depth = dot(toPoint, cam.fw);
-    if (depth <= 0.0) return vec3(0.0, 0.0, -1.0);
-    float sx = dot(toPoint, cam.rt) / (depth * cam.fovScale);
-    float sy = dot(toPoint, cam.up) / (depth * cam.fovScale);
-    vec2 screenUV = vec2(sx / cam.aspect, sy) * 0.5 + 0.5;
-    return vec3(screenUV, depth);
-}
-
-float scene3d_drawLine(vec2 uv, vec3 a3d, vec3 b3d, Scene3D cam, float widthPx) {
-    vec3 a2d = scene3d_projectPt(a3d, cam);
-    vec3 b2d = scene3d_projectPt(b3d, cam);
-    if (a2d.z < 0.0 || b2d.z < 0.0) return 0.0;
-    vec2 pa = uv - a2d.xy;
-    vec2 ba = b2d.xy - a2d.xy;
-    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-    float d = length(pa - ba * h);
-    float avgDepth = (a2d.z + b2d.z) * 0.5;
-    float w = widthPx * cam.pxSize / max(avgDepth * cam.fovScale, 0.001);
-    return 1.0 - smoothstep(0.0, w, d);
+float scene3d_planeHit(Scene3D cam, float planeY) {
+    if (abs(cam.rd.y) < 0.0001) return -1.0;
+    float t = (planeY - cam.ro.y) / cam.rd.y;
+    return t > 0.0 ? t : -1.0;
 }
 
 // ============================================================
 // END scene3d_include
 // ============================================================
 
-// Pseudo-random
-float hash(float n) {
-    return fract(sin(n) * 43758.5453);
-}
 
 void main() {
     vec2 uv = isf_FragNormCoord;
 
-    // Time
     float t;
     #ifdef VIDEOSYNC
         t = BEAT;
@@ -212,81 +219,84 @@ void main() {
         t = TIME;
     #endif
 
-    // Setup unified 3D camera
     Scene3D cam = scene3d_setup(uv, RENDERSIZE,
-                                 camDistance, camHeight, camYaw, camPitch, fov);
+                                 camDistance, camHeight, camYaw, camPitch, fov,
+                                 tunnelSpeed, tunnelDepth, t);
 
     float intensity = 0.0;
 
-    // Ray-plane intersection at y = 0 (ground plane)
-    if (abs(cam.rd.y) > 0.0001) {
-        float hitT = -cam.ro.y / cam.rd.y;
+    // Ray-plane intersection at y=0 (cockpit floor)
+    float hitT = scene3d_planeHit(cam, 0.0);
 
-        if (hitT > 0.0) {
-            vec3 hitPos = cam.ro + cam.rd * hitT;
+    if (hitT > 0.0) {
+        vec3 hitPos = cam.ro + cam.rd * hitT;
 
-            // Grid lines
-            vec2 gridUV = hitPos.xz / gridSpacing;
-            float derivScale = hitT * 0.002 * lineWidth;
-            vec2 gridDeriv = vec2(derivScale);
+        // Scroll the floor — the conveyor belt moves the ground beneath us
+        // mod prevents float overflow on long runs
+        float scrollMod = mod(cam.scroll, gridSpacing * 256.0);
+        hitPos.z -= scrollMod;
 
-            // Major grid
-            vec2 grid = abs(fract(gridUV - 0.5) - 0.5);
-            vec2 lw = 1.5 * gridDeriv;
-            vec2 gridAA = smoothstep(lw, lw + gridDeriv, grid);
-            float majorGrid = 1.0 - min(gridAA.x, gridAA.y);
+        // Grid lines
+        vec2 gridUV = hitPos.xz / gridSpacing;
+        float derivScale = hitT * 0.002 * lineWidth;
+        vec2 gridDeriv = vec2(derivScale);
 
-            // Minor grid (4x subdivision)
-            vec2 minorGridUV = gridUV * 4.0;
-            vec2 minorGrid = abs(fract(minorGridUV - 0.5) - 0.5);
-            vec2 minorLw = 0.75 * gridDeriv * 4.0;
-            vec2 minorGridDeriv = gridDeriv * 4.0;
-            vec2 minorAA = smoothstep(minorLw, minorLw + minorGridDeriv, minorGrid);
-            float minGrid = (1.0 - min(minorAA.x, minorAA.y)) * 0.3;
+        // Major grid
+        vec2 grid = abs(fract(gridUV - 0.5) - 0.5);
+        vec2 lw = 1.5 * gridDeriv;
+        vec2 gridAA = smoothstep(lw, lw + gridDeriv, grid);
+        float majorGrid = 1.0 - min(gridAA.x, gridAA.y);
 
-            // Distance fade
-            float dist = length(hitPos.xz - cam.ro.xz);
-            float fade = 1.0 - smoothstep(gridFadeDistance * 0.5, gridFadeDistance, dist);
+        // Minor grid (4x subdivision)
+        vec2 minorGridUV = gridUV * 4.0;
+        vec2 minorGrid = abs(fract(minorGridUV - 0.5) - 0.5);
+        vec2 minorLw = 0.75 * gridDeriv * 4.0;
+        vec2 minorGridDeriv = gridDeriv * 4.0;
+        vec2 minorAA = smoothstep(minorLw, minorLw + minorGridDeriv, minorGrid);
+        float minGrid = (1.0 - min(minorAA.x, minorAA.y)) * 0.3;
 
-            // Combine grid layers
-            float gridTotal = majorGrid + minGrid * (1.0 - majorGrid);
+        // Distance fade
+        float dist = length(hitPos.xz - cam.ro.xz);
+        float fade = 1.0 - smoothstep(gridFadeDistance * 0.5, gridFadeDistance, dist);
 
-            // Animated scan lines on the ground plane
-            float scanIntensity = 0.0;
-            if (showScanLines) {
-                // Radial scan from origin
-                float scanZ = fract(t * scanSpeed * 0.25) * gridFadeDistance - gridFadeDistance * 0.5;
-                float scanDist = abs(hitPos.z - scanZ);
-                scanIntensity += exp(-scanDist * 3.0) * 0.6;
+        // Combine grid layers
+        float gridTotal = majorGrid + minGrid * (1.0 - majorGrid);
 
-                // X-axis scan
-                float scanX = fract(t * scanSpeed * 0.15 + 0.5) * gridFadeDistance - gridFadeDistance * 0.5;
-                float scanDistX = abs(hitPos.x - scanX);
-                scanIntensity += exp(-scanDistX * 4.0) * 0.4;
+        // Animated scan lines on the scrolling floor
+        float scanIntensity = 0.0;
+        if (showScanLines) {
+            // Forward-traveling scan (rides the conveyor, wraps with mod)
+            float scanPhase = mod(t * scanSpeed * 0.25, 1.0);
+            float scanZ = scanPhase * gridFadeDistance - gridFadeDistance * 0.5;
+            float scanDist = abs(hitPos.z - scanZ);
+            scanIntensity += exp(-scanDist * 3.0) * 0.6;
 
-                // Boost grid lines where scan crosses
-                if (majorGrid > 0.5) {
-                    scanIntensity *= 1.5;
-                }
-            }
+            // Cross scan (perpendicular)
+            float scanPhaseX = mod(t * scanSpeed * 0.15 + 0.5, 1.0);
+            float scanX = scanPhaseX * gridFadeDistance - gridFadeDistance * 0.5;
+            float scanDistX = abs(hitPos.x - scanX);
+            scanIntensity += exp(-scanDistX * 4.0) * 0.4;
 
-            // Glow around major grid lines
-            vec2 glowGrid = abs(fract(gridUV - 0.5) - 0.5);
-            vec2 glowLw = 6.0 * gridDeriv;
-            vec2 glowAA = smoothstep(glowLw, glowLw + gridDeriv * 2.0, glowGrid);
-            float glow = (1.0 - min(glowAA.x, glowAA.y)) * glowIntensity * 0.3;
-
-            // Cell pulsing
-            float cellX = floor(gridUV.x);
-            float cellY = floor(gridUV.y);
-            float cellHash = hash(cellX * 17.0 + cellY * 31.0);
-            float cellPulse = 0.0;
-            if (cellHash > 0.7) {
-                cellPulse = 0.3 * (sin(t * 2.0 + cellHash * 6.28318) * 0.5 + 0.5);
-            }
-
-            intensity = (gridTotal + cellPulse * majorGrid + glow + scanIntensity) * fade;
+            // Boost where scan crosses major grid lines
+            scanIntensity *= 1.0 + majorGrid * 0.5;
         }
+
+        // Glow around major grid lines
+        vec2 glowGrid = abs(fract(gridUV - 0.5) - 0.5);
+        vec2 glowLw = 6.0 * gridDeriv;
+        vec2 glowAA = smoothstep(glowLw, glowLw + gridDeriv * 2.0, glowGrid);
+        float glow = (1.0 - min(glowAA.x, glowAA.y)) * glowIntensity * 0.3;
+
+        // Cell pulsing — random cells light up
+        float cellX = floor(gridUV.x);
+        float cellY = floor(gridUV.y);
+        float cellHash = scene3d_hash(cellX * 17.0 + cellY * 31.0);
+        float cellPulse = 0.0;
+        if (cellHash > 0.7) {
+            cellPulse = 0.3 * (sin(t * 2.0 + cellHash * 6.28318) * 0.5 + 0.5);
+        }
+
+        intensity = (gridTotal + cellPulse * majorGrid + glow + scanIntensity) * fade;
     }
 
     intensity = clamp(intensity, 0.0, 1.0);

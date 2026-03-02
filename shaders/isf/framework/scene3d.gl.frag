@@ -1,11 +1,7 @@
 // scene3d — Unified 3D Framework — Desktop GL Fragment Shader
 // ============================================================
-// GLSL 330 core — for desktop OpenGL applications.
-// Identical camera/projection math as scene3d.fs (ISF)
-// and scene3d.webgl.frag (WebGL).
-//
-// Uses fwidth() for proper grid anti-aliasing (available in
-// desktop GL, unlike WebGL 1.0 without extensions).
+// GLSL 330 core — identical tunnel/camera math as ISF and WebGL.
+// Uses fwidth() for proper grid anti-aliasing.
 // ============================================================
 
 #version 330 core
@@ -24,8 +20,10 @@ uniform float u_camHeight;
 uniform float u_camPitch;
 uniform float u_camYaw;
 uniform float u_fov;
-uniform float u_zNear;
-uniform float u_zFar;
+
+// Tunnel uniforms
+uniform float u_tunnelSpeed;
+uniform float u_tunnelDepth;
 
 // Visual uniforms
 uniform float u_gridSize;
@@ -35,117 +33,149 @@ uniform vec4  u_lineColor;
 uniform vec4  u_bgColor;
 uniform bool  u_showGrid;
 uniform bool  u_showAxes;
+uniform bool  u_showMarkers;
 
 // ============================================================
-// FRAMEWORK CORE — identical math across all three versions
+// FRAMEWORK CORE — identical math across ISF / WebGL / GL
 // ============================================================
 
-vec3 scene3d_camPos(float dist, float height, float yaw) {
-    return vec3(
-        sin(yaw) * dist,
-        height,
-        cos(yaw) * dist
-    );
+float scene3d_hash(float n) {
+    return fract(sin(n * 127.1) * 43758.5453);
 }
 
-void scene3d_lookAt(vec3 eye, vec3 target, vec3 up,
-                     out vec3 fw, out vec3 rt, out vec3 u) {
+struct Scene3D {
+    vec2  uv;
+    float aspect;
+    vec3  ro;
+    vec3  rd;
+    vec3  fw;
+    vec3  rt;
+    vec3  up;
+    float fovScale;
+    float pxSize;
+    float scroll;
+    float depth;
+    float speed;
+    float time;
+};
+
+vec3 _s3d_camPos(float dist, float height, float yaw) {
+    return vec3(sin(yaw) * dist, height, cos(yaw) * dist);
+}
+
+void _s3d_lookAt(vec3 eye, vec3 target, vec3 worldUp,
+                  out vec3 fw, out vec3 rt, out vec3 u) {
     fw = normalize(target - eye);
-    rt = normalize(cross(fw, up));
+    rt = normalize(cross(fw, worldUp));
     u  = cross(rt, fw);
 }
 
-vec3 scene3d_rayDir(vec2 uv, float aspect, float pitch,
-                     vec3 fw, vec3 rt, vec3 u, float fovScale) {
+vec3 _s3d_rayDir(vec2 uv, float aspect, float pitch,
+                  vec3 fw, vec3 rt, vec3 u, float fovScale) {
     vec2 ndc = (uv - 0.5) * 2.0;
     ndc.x *= aspect;
-    vec2 screenPos = ndc * fovScale;
-
-    vec3 rd = normalize(fw + rt * screenPos.x + u * screenPos.y);
-
-    // Pitch rotation around the right axis
+    vec2 sp = ndc * fovScale;
+    vec3 rd = normalize(fw + rt * sp.x + u * sp.y);
     float cp = cos(pitch);
-    float sp = sin(pitch);
+    float sn = sin(pitch);
     float rdY = dot(rd, u);
     float rdZ = dot(rd, fw);
-    vec3 rdPitched = rt * dot(rd, rt)
-                   + u  * (rdY * cp - rdZ * sp)
-                   + fw * (rdY * sp + rdZ * cp);
-
-    return normalize(rdPitched);
+    return normalize(
+        rt * dot(rd, rt) +
+        u  * (rdY * cp - rdZ * sn) +
+        fw * (rdY * sn + rdZ * cp)
+    );
 }
 
-void scene3d_ray(vec2 uv, float aspect,
-                  float dist, float height, float yaw, float pitch,
-                  float fovScale,
-                  out vec3 ro, out vec3 rd) {
-    ro = scene3d_camPos(dist, height, yaw);
-    vec3 target = vec3(0.0, 0.0, 0.0);
-    vec3 fw, rt, u;
-    scene3d_lookAt(ro, target, vec3(0.0, 1.0, 0.0), fw, rt, u);
-    rd = scene3d_rayDir(uv, aspect, pitch, fw, rt, u, fovScale);
+Scene3D scene3d_setup(vec2 uv, vec2 resolution,
+                       float dist, float height,
+                       float yaw, float pitch, float fovIn,
+                       float tSpeed, float tDepth, float time) {
+    Scene3D cam;
+    cam.uv       = uv;
+    cam.aspect   = resolution.x / resolution.y;
+    cam.fovScale = tan(fovIn * 0.5 * 3.14159);
+    cam.pxSize   = 1.0 / resolution.y;
+    cam.ro = _s3d_camPos(dist, height, yaw);
+    vec3 fw0, rt0, u0;
+    _s3d_lookAt(cam.ro, vec3(0.0), vec3(0.0, 1.0, 0.0), fw0, rt0, u0);
+    cam.rd = _s3d_rayDir(uv, cam.aspect, pitch, fw0, rt0, u0, cam.fovScale);
+    cam.rt = rt0;
+    float cp = cos(pitch);
+    float sp = sin(pitch);
+    cam.fw = fw0 * cp + u0 * sp;
+    cam.up = u0 * cp - fw0 * sp;
+    cam.speed  = tSpeed;
+    cam.depth  = tDepth;
+    cam.time   = time;
+    cam.scroll = time * tSpeed;
+    return cam;
 }
 
-vec3 scene3d_project(vec3 worldPos, vec3 camPos, vec3 fw, vec3 rt, vec3 u,
-                      float aspect, float fovScale) {
-    vec3 toPoint = worldPos - camPos;
-    float depth = dot(toPoint, fw);
+vec3 scene3d_projectPt(vec3 worldPos, Scene3D cam) {
+    vec3 toPoint = worldPos - cam.ro;
+    float depth = dot(toPoint, cam.fw);
     if (depth <= 0.0) return vec3(0.0, 0.0, -1.0);
-
-    float screenX = dot(toPoint, rt) / (depth * fovScale);
-    float screenY = dot(toPoint, u) / (depth * fovScale);
-    vec2 screenUV = vec2(screenX / aspect, screenY) * 0.5 + 0.5;
-
+    float sx = dot(toPoint, cam.rt) / (depth * cam.fovScale);
+    float sy = dot(toPoint, cam.up) / (depth * cam.fovScale);
+    vec2 screenUV = vec2(sx / cam.aspect, sy) * 0.5 + 0.5;
     return vec3(screenUV, depth);
 }
 
-float scene3d_line(vec2 uv, vec3 a3d, vec3 b3d,
-                    vec3 camPos, vec3 fw, vec3 rt, vec3 u,
-                    float aspect, float fovScale, float width) {
-    vec3 a2d = scene3d_project(a3d, camPos, fw, rt, u, aspect, fovScale);
-    vec3 b2d = scene3d_project(b3d, camPos, fw, rt, u, aspect, fovScale);
-
+float scene3d_drawLine(vec2 uv, vec3 a3d, vec3 b3d, Scene3D cam, float widthPx) {
+    vec3 a2d = scene3d_projectPt(a3d, cam);
+    vec3 b2d = scene3d_projectPt(b3d, cam);
     if (a2d.z < 0.0 || b2d.z < 0.0) return 0.0;
-
     vec2 pa = uv - a2d.xy;
     vec2 ba = b2d.xy - a2d.xy;
     float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
     float d = length(pa - ba * h);
-
     float avgDepth = (a2d.z + b2d.z) * 0.5;
-    float depthWidth = width / max(avgDepth * fovScale, 0.001);
-
-    return 1.0 - smoothstep(0.0, depthWidth, d);
+    float w = widthPx * cam.pxSize / max(avgDepth * cam.fovScale, 0.001);
+    return 1.0 - smoothstep(0.0, w, d);
 }
 
-float scene3d_planeHit(vec3 ro, vec3 rd, float planeY) {
-    if (abs(rd.y) < 0.0001) return -1.0;
-    float t = (planeY - ro.y) / rd.y;
+vec4 scene3d_slot(Scene3D cam, int index, int count) {
+    float n = float(count);
+    float basePhase = cam.scroll / cam.depth;
+    float totalPhase = basePhase + float(index) / n;
+    float phase = fract(totalPhase);
+    float cycle = floor(totalPhase);
+    float z = -cam.depth * (1.0 - phase);
+    float id = cycle * n + float(index);
+    return vec4(0.0, 0.0, z, id);
+}
+
+float scene3d_slotFade(Scene3D cam, float z) {
+    return clamp(1.0 + z / cam.depth, 0.0, 1.0);
+}
+
+float scene3d_planeHit(Scene3D cam, float planeY) {
+    if (abs(cam.rd.y) < 0.0001) return -1.0;
+    float t = (planeY - cam.ro.y) / cam.rd.y;
     return t > 0.0 ? t : -1.0;
 }
 
-// Desktop GL has fwidth() — proper grid anti-aliasing
-float scene3d_grid(vec3 ro, vec3 rd, float spacing, float fadeDistance, float lineW) {
-    float t = scene3d_planeHit(ro, rd, 0.0);
+// Desktop GL version uses fwidth() for proper grid AA
+float scene3d_scrollGrid(Scene3D cam, float spacing, float fadeDistance, float lineW) {
+    float t = scene3d_planeHit(cam, 0.0);
     if (t < 0.0) return 0.0;
-
-    vec3 hitPos = ro + rd * t;
-
+    vec3 hitPos = cam.ro + cam.rd * t;
+    float scrollMod = mod(cam.scroll, spacing * 256.0);
+    hitPos.z -= scrollMod;
     vec2 gridUV = hitPos.xz / spacing;
     vec2 gridDeriv = fwidth(gridUV);
     vec2 grid = abs(fract(gridUV - 0.5) - 0.5);
     vec2 lw = lineW * gridDeriv;
     vec2 gridAA = smoothstep(lw, lw + gridDeriv, grid);
     float gridLine = 1.0 - min(gridAA.x, gridAA.y);
-
-    float dist = length(hitPos.xz - ro.xz);
+    float dist = length(hitPos.xz - cam.ro.xz);
     float fade = 1.0 - smoothstep(fadeDistance * 0.5, fadeDistance, dist);
-
     return gridLine * fade;
 }
 
-float scene3d_fog(float depth, float density) {
-    return 1.0 - exp(-depth * density);
+float scene3d_depthFade(float depth, float nearClip, float farClip) {
+    return 1.0 - clamp((depth - nearClip) / (farClip - nearClip), 0.0, 1.0);
 }
 
 // ============================================================
@@ -154,39 +184,48 @@ float scene3d_fog(float depth, float density) {
 
 void main() {
     vec2 uv = v_uv;
-    float aspect = u_resolution.x / u_resolution.y;
-    float pxToNorm = 1.0 / u_resolution.y;
-    float lw = u_lineWidth * pxToNorm;
 
-    float fovScale = tan(u_fov * 0.5 * 3.14159);
-
-    vec3 ro, rd;
-    scene3d_ray(uv, aspect, u_camDistance, u_camHeight, u_camYaw, u_camPitch,
-                fovScale, ro, rd);
-
-    vec3 target = vec3(0.0, 0.0, 0.0);
-    vec3 fw, rt, u;
-    scene3d_lookAt(ro, target, vec3(0.0, 1.0, 0.0), fw, rt, u);
-
-    float cp = cos(u_camPitch);
-    float sp = sin(u_camPitch);
-    vec3 fw2 = fw * cp + u * sp;
-    vec3 u2  = u * cp - fw * sp;
+    Scene3D cam = scene3d_setup(uv, u_resolution,
+                                 u_camDistance, u_camHeight, u_camYaw, u_camPitch, u_fov,
+                                 u_tunnelSpeed, u_tunnelDepth, u_time);
 
     float intensity = 0.0;
 
     if (u_showGrid) {
-        intensity += scene3d_grid(ro, rd, u_gridSize, u_gridFade, 1.5) * 0.6;
+        intensity += scene3d_scrollGrid(cam, u_gridSize, u_gridFade, 1.5) * 0.6;
     }
 
     if (u_showAxes) {
         float axisLen = 3.0;
-        intensity += scene3d_line(uv, vec3(0.0), vec3(axisLen, 0.0, 0.0),
-                                   ro, fw2, rt, u2, aspect, fovScale, lw * 2.0);
-        intensity += scene3d_line(uv, vec3(0.0), vec3(0.0, axisLen, 0.0),
-                                   ro, fw2, rt, u2, aspect, fovScale, lw * 2.0);
-        intensity += scene3d_line(uv, vec3(0.0), vec3(0.0, 0.0, axisLen),
-                                   ro, fw2, rt, u2, aspect, fovScale, lw * 2.0);
+        intensity += scene3d_drawLine(uv, vec3(0.0), vec3(axisLen, 0.0, 0.0),
+                                       cam, u_lineWidth * 2.0);
+        intensity += scene3d_drawLine(uv, vec3(0.0), vec3(0.0, axisLen, 0.0),
+                                       cam, u_lineWidth * 2.0);
+        intensity += scene3d_drawLine(uv, vec3(0.0), vec3(0.0, 0.0, -axisLen),
+                                       cam, u_lineWidth * 2.0);
+    }
+
+    if (u_showMarkers) {
+        for (int i = 0; i < 10; i++) {
+            vec4 slot = scene3d_slot(cam, i, 10);
+            float id = slot.w;
+            float fade = scene3d_slotFade(cam, slot.z);
+
+            float xPos = (scene3d_hash(id * 7.3) - 0.5) * 8.0;
+            float yPos = scene3d_hash(id * 13.1) * 2.0;
+            vec3 center = vec3(xPos, yPos, slot.z);
+
+            float sz = 0.3 + scene3d_hash(id * 41.7) * 0.4;
+            float cross_val = 0.0;
+            cross_val = max(cross_val, scene3d_drawLine(uv,
+                center + vec3(-sz, 0.0, 0.0), center + vec3(sz, 0.0, 0.0),
+                cam, u_lineWidth));
+            cross_val = max(cross_val, scene3d_drawLine(uv,
+                center + vec3(0.0, -sz, 0.0), center + vec3(0.0, sz, 0.0),
+                cam, u_lineWidth));
+
+            intensity = max(intensity, cross_val * fade);
+        }
     }
 
     intensity = clamp(intensity, 0.0, 1.0);

@@ -1,5 +1,5 @@
 {
-  "_comment": "Paste these into your ISF INPUTS array for unified 3D camera control. All shaders sharing these inputs will have identical perspective when composited.",
+  "_comment": "Paste these into your ISF INPUTS array. All shaders sharing these inputs will have identical perspective and tunnel motion when composited as layers.",
   "camera_inputs": [
     {
       "NAME": "camDistance",
@@ -40,6 +40,24 @@
       "DEFAULT": 1.0,
       "MIN": 0.2,
       "MAX": 3.0
+    }
+  ],
+  "tunnel_inputs": [
+    {
+      "NAME": "tunnelSpeed",
+      "LABEL": "Tunnel Speed",
+      "TYPE": "float",
+      "DEFAULT": 2.0,
+      "MIN": 0.0,
+      "MAX": 10.0
+    },
+    {
+      "NAME": "tunnelDepth",
+      "LABEL": "Tunnel Depth",
+      "TYPE": "float",
+      "DEFAULT": 50.0,
+      "MIN": 10.0,
+      "MAX": 100.0
     }
   ]
 }

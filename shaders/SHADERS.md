@@ -323,16 +323,21 @@ Then open `http://localhost:8000/isf-test.html`
 
 ## Unified 3D Framework (scene3d)
 
-All visualizations — even 2D representations — use a shared 3D camera and projection system so that layers composite as one scene when stacked.
+All visualizations — even 2D representations — use a shared 3D camera, projection, and **infinite tunnel conveyor belt**. The visual concept: a spaceship control panel looking out into abstract space, producing visualizations of real phenomena.
+
+### Architecture
+
+The camera is **fixed** (cockpit). The world scrolls toward you on a **conveyor belt**. Objects are placed using modular arithmetic (`fract`) so they recycle infinitely — zero allocations, pure math, runs forever without memory growth or frame drops.
+
+When objects pass behind the camera they are automatically culled by the projection system (returns `z < 0`). When they wrap around the conveyor belt they get a new unique ID, so they appear as fresh objects with different randomized properties.
 
 ### Why
 
-When multiple shaders render separate layers (e.g. ground grid + pyramids + tunnel), they must share **identical camera parameters** to align perfectly. The scene3d framework provides:
-
-- **Shared camera** — orbital camera with distance, height, yaw, pitch, FOV
-- **Shared projection** — consistent perspective projection across all layers
-- **Shared coordinate system** — right-handed: X=right, Y=up, Z=forward
-- **Three shader versions** — ISF, WebGL, desktop GL (all share the same math)
+- **Shared camera** — every layer shares identical perspective for compositing
+- **Infinite tunnel** — conveyor belt runs forever, O(1) per slot, no accumulation
+- **Behind-camera culling** — automatic, no wasted GPU cycles on invisible geometry
+- **Float-safe** — `mod(scroll, spacing)` prevents overflow on 24/7 runtime
+- **Three shader versions** — ISF, WebGL, desktop GL (identical math)
 
 ### Versions
 
@@ -342,43 +347,64 @@ When multiple shaders render separate layers (e.g. ground grid + pyramids + tunn
 | `scene3d.webgl.vert/frag` | GLSL ES 1.0 | Browser / WebGL |
 | `scene3d.gl.vert/frag` | GLSL 330 core | Desktop OpenGL |
 | `scene3d_include.glsl` | Portable GLSL | Copy-paste into any shader |
-| `scene3d_inputs.json` | JSON | Standard ISF camera inputs |
+| `scene3d_inputs.json` | JSON | Standard camera + tunnel ISF inputs |
 
 ### Usage — Adding the Framework to a Shader
 
-1. **Copy the camera INPUTS** from `scene3d_inputs.json` into your ISF metadata
+1. **Copy the camera + tunnel INPUTS** from `scene3d_inputs.json` into your ISF metadata
 2. **Paste** the `scene3d_include.glsl` block into your shader
 3. **Initialize** in `main()`:
 
 ```glsl
+float t;
+#ifdef VIDEOSYNC
+    t = BEAT;
+#else
+    t = TIME;
+#endif
+
 Scene3D cam = scene3d_setup(
     isf_FragNormCoord, RENDERSIZE,
-    camDistance, camHeight, camYaw, camPitch, fov
+    camDistance, camHeight, camYaw, camPitch, fov,
+    tunnelSpeed, tunnelDepth, t
 );
 ```
 
-4. **Use the API** to draw your content:
+4. **Place objects on the conveyor belt:**
 
 ```glsl
-// Project a 3D point to screen
-vec3 screenPt = scene3d_projectPt(vec3(1.0, 0.0, -5.0), cam);
+int numObjects = 10;
+for (int i = 0; i < 10; i++) {
+    vec4 slot = scene3d_slot(cam, i, numObjects);
+    // slot.xyz = world position (x=0, y=0, z=computed)
+    // slot.w   = unique ID (changes each wrap cycle)
 
-// Draw a 3D line (returns intensity 0-1)
-float line = scene3d_drawLine(cam.uv, vec3(0.0), vec3(1.0, 1.0, 0.0), cam, 1.5);
+    float id = slot.w;
+    float fade = scene3d_slotFade(cam, slot.z);
 
-// Draw ground grid
-float grid = scene3d_drawGrid(cam, 1.0, 20.0, 1.5);
+    // Randomize position from hash — different every cycle
+    float xPos = (scene3d_hash(id * 7.3) - 0.5) * 8.0;
+    vec3 objPos = vec3(xPos, 0.0, slot.z);
 
-// Ray-plane intersection (ground plane at y=0)
-vec4 hit = scene3d_planePos(cam, 0.0);  // .w = 1.0 if hit
-
-// Depth-based fade
-float fade = scene3d_depthFade(screenPt.z, 1.0, 50.0);
+    // Draw your geometry at objPos, multiply by fade
+    float line = scene3d_drawLine(cam.uv, objPos, objPos + vec3(0,1,0), cam, 1.5);
+    intensity += line * fade;
+}
 ```
 
-### Camera Parameters
+5. **Use the scrolling ground grid (cockpit floor):**
 
-All shaders sharing these parameters will have identical perspective:
+```glsl
+// Grid that flows beneath the camera
+float grid = scene3d_scrollGrid(cam, 1.0, 30.0, 1.5);
+
+// Or static grid (no scroll)
+float staticGrid = scene3d_drawGrid(cam, 1.0, 20.0, 1.5);
+```
+
+### Shared Parameters
+
+All shaders sharing these parameters will have identical perspective and motion:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -387,29 +413,43 @@ All shaders sharing these parameters will have identical perspective:
 | `camPitch` | 0.3 | Vertical angle (radians) |
 | `camYaw` | 0.0 | Horizontal angle (radians) |
 | `fov` | 1.0 | Field of view scale |
+| `tunnelSpeed` | 2.0 | Conveyor speed (world units per time) |
+| `tunnelDepth` | 50.0 | How far the tunnel extends into -Z |
 
-### Performance Notes
+### Conveyor Belt API
 
-- **No branching in core math** — all projection is pure arithmetic
-- **Early-out for behind-camera** — lines/points behind camera return immediately
-- **Depth-scaled line width** — thinner lines at distance = fewer pixels to anti-alias
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `scene3d_slot(cam, i, n)` | `vec4(x,y,z,id)` | Position + unique ID for slot `i` of `n` on the belt |
+| `scene3d_slotFade(cam, z)` | `float 0-1` | Depth fade: 0 at far end, 1 at camera |
+| `scene3d_hash(n)` | `float 0-1` | Deterministic hash for randomizing slot properties |
+| `scene3d_scrollGrid(cam, ...)` | `float 0-1` | Ground grid that scrolls with the conveyor |
+
+### Performance Design
+
+- **No branching in projection** — pure arithmetic, GPU-friendly
+- **Early-out culling** — behind-camera geometry returns `0.0` immediately
+- **Conveyor is O(1) per slot** — `fract()` + `floor()`, no loops, no arrays
+- **Depth-scaled line width** — thinner at distance = fewer pixels to shade
 - **Grid uses analytical derivatives** — no texture sampling, no multi-pass
-- Each shader is one layer — keep per-layer cost low for compositing
+- **mod(scroll, spacing)** — prevents float overflow on long runs
+- **Each shader = one layer** — keep per-layer cost minimal for compositing
+- **Float32 precision safe** — `scroll/depth` stays within integer-representable range for years of continuous runtime
 
 ### Compositing Layers
 
 To composite multiple scene3d layers in Videosync:
 
-1. Set all layers to the **same camera values** (camDistance, camHeight, camPitch, camYaw, fov)
+1. Set all layers to the **same camera + tunnel values** (camDistance, camHeight, camPitch, camYaw, fov, tunnelSpeed, tunnelDepth)
 2. Use **additive blending** (black background + white lines)
 3. Each layer's `bgColor` should be `[0, 0, 0, 1]`
-4. Stack as many layers as needed — the shared perspective ensures alignment
+4. Stack as many layers as needed — shared perspective + shared conveyor speed ensures everything aligns
 
-### Example Sketches Using the Framework
+### Example Sketches
 
-- `0006-pyramid-road-3d.fs` — Wireframe pyramids in true 3D space
-- `0007-grid-tunnel-3d.fs` — Rectangle tunnel with depth
-- `0008-scifi-grid-3d.fs` — Infinite ground grid with scan lines
+- `0006-pyramid-road-3d.fs` — Wireframe pyramids riding the conveyor belt
+- `0007-grid-tunnel-3d.fs` — Rectangle corridor with rail lines on the belt
+- `0008-scifi-grid-3d.fs` — Scrolling cockpit floor with scan lines and cell pulsing
 
 ## Resources
 
